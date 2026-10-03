@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     db_user: str = "pawspot"
     db_password: SecretStr
     db_connect_timeout_seconds: int = Field(default=3, ge=1, le=30)
+    public_location_radius_m: int = Field(default=200, ge=50, le=2000)
 
     @property
     def database_url(self) -> URL:

@@ -1,6 +1,6 @@
 # PawSpot: архитектура
 
-Статус: проект Phase 0 от 2026-10-03. Реализация и совместимость зависимостей ещё не проверены запуском.
+Статус: проект Phase 0 от 2026-10-03; фундамент моделей и миграций реализован в Phase 2. Остальные разделы описывают последующие этапы.
 
 ## 1. Архитектура и границы
 
@@ -114,9 +114,9 @@ Bot не импортирует ORM или services backend и не получа
 | users | id UUID PK; telegram_id BIGINT UNIQUE; telegram_username nullable; display_name; created_at; updated_at |
 | cities | id UUID PK; slug UNIQUE; name; country_code CHAR(2); latitude; longitude; timezone; selection_radius_m; валидные диапазоны координат и IANA timezone |
 | animals | id UUID PK; species VARCHAR + CHECK cat/dog; name nullable до 80 символов; primary_photo_id nullable FK; city_id nullable FK; created_by_user_id FK; status active/merged/hidden; merged_into_id nullable self-FK; created_at; updated_at |
-| encounters | id UUID PK; animal_id FK; user_id FK; photo_id UNIQUE FK; city_id nullable FK; private_location nullable geography(Point,4326); public_location nullable geography(Point,4326); public_cell_key nullable; geo_policy_version nullable; comment до 500; observed_at; created_at; updated_at; deleted_at nullable |
+| encounters | id UUID PK; animal_id FK; user_id FK; photo_id nullable UNIQUE FK; city_id NOT NULL FK; private_location nullable geography(Point,4326); public_location nullable geography(Point,4326); public_cell_key nullable; geo_policy_version nullable; comment до 500; observed_at; created_at; updated_at; deleted_at nullable |
 | photos | id UUID PK; uploaded_by_user_id FK; storage_key UNIQUE; thumbnail_key UNIQUE; actual_mime; bytes; width; height; status ready/deleting; created_at |
-| reactions | id UUID PK; user_id FK; encounter_id FK; reaction_type CHECK like/funny/cute; created_at; UNIQUE(user_id,encounter_id,reaction_type) |
+| reactions | id UUID PK; user_id FK; encounter_id FK; reaction_type CHECK heart/laugh/love; created_at; UNIQUE(user_id,encounter_id,reaction_type) |
 | encounter_drafts | id UUID PK; user_id FK; status active/committed/cancelled; version; photo_id nullable FK; species nullable; coordinates nullable; city_id nullable; animal_id nullable FK; new_name nullable; comment nullable; observed_at; result_encounter_id nullable UNIQUE FK; expires_at; created_at; updated_at |
 | auth_sessions | id UUID PK; user_id FK; token_hash UNIQUE; expires_at; revoked_at nullable; created_at |
 
@@ -142,6 +142,8 @@ erDiagram
 Индексы: encounters(animal_id, observed_at DESC, id), encounters(user_id, observed_at DESC, id), encounters(created_at DESC, id) для feed; GiST(public_location) по видимым встречам; reactions(encounter_id); animals(species, status); partial UNIQUE(user_id) для active drafts. Индексы по реальным запросам проверяем EXPLAIN, не индексируем всё заранее.
 
 Animal.city_id — исходный подтверждённый контекст. Encounter.city_id сохраняет город конкретного наблюдения, поэтому перемещение не переписывает прошлое. Профиль берёт текущую область/город из последней географической встречи и может отдельно показать исходный город.
+
+Phase 2 уточняет Phase 0 по явному решению владельца: `Encounter.city_id` обязателен, а словарь реакций — `heart/laugh/love`. Для фото создана только таблица метаданных; `Encounter.photo_id` временно nullable, чтобы фундамент модели проверялся до загрузки изображений. Phase 4 добавит обязательность фото в use case и затем DB constraint до появления реальных данных. При отсутствии координат город определяется из выбранного контекста; при сомнительных координатах нужен выбор города. Обязательный город не добавляет отдельный шаг пользователю в обычном сценарии Тбилиси.
 
 Счётчики пока вычисляются запросами, без денормализованных колонок. Учитываются только видимые Animal/Encounter и действующие реакции. Photo count не считает thumbnails. Collection — DISTINCT animal_id по Encounter пользователя, после merge сразу отражает canonical Animal. Все связи удаления по умолчанию RESTRICT; встречи не исчезают каскадом при merge.
 

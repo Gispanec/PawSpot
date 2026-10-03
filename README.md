@@ -1,6 +1,6 @@
 # PawSpot
 
-PawSpot — коллекция встреч с городскими котами и собаками. Реализован каркас **Phase 1**; для окончательной локальной проверки PostgreSQL/PostGIS необходим Docker. Это ещё не пользовательский сервис: Animal, Encounter, Bot и Mini App появятся в следующих этапах. Пилот закрыт для Telegram-пользователей из allowlist, share-ссылки не дают анонимного доступа.
+PawSpot — коллекция встреч с городскими котами и собаками. Реализованы каркас Phase 1 и фундамент данных Phase 2. Пользовательский сценарий ещё не реализован: Bot, Mini App и создание встреч через API появятся в следующих этапах. Пилот закрыт для Telegram-пользователей из allowlist, share-ссылки не дают анонимного доступа.
 
 Документы: [продукт](docs/product.md), [архитектура](docs/architecture.md), [проект API](docs/api.md), [roadmap](docs/roadmap.md).
 
@@ -37,6 +37,7 @@ notepad .env
 docker compose --env-file .env -f infra/compose.yaml up -d --wait
 docker compose --env-file .env -f infra/compose.yaml exec postgres psql -U pawspot -d pawspot -c "SELECT PostGIS_Version();"
 uv sync --locked --package pawspot-backend --extra dev
+uv run --locked --package pawspot-backend --extra dev alembic -c backend/alembic.ini upgrade head
 uv run --locked --package pawspot-backend --extra dev uvicorn pawspot.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -50,6 +51,7 @@ uv run --locked --package pawspot-backend --extra dev ruff check backend
 uv run --locked --package pawspot-backend --extra dev ruff format --check backend
 uv run --locked --package pawspot-backend --extra dev mypy
 uv run --locked --package pawspot-backend --extra dev pytest -m integration
+uv lock --check
 ```
 
 ## POSIX / Linux / macOS
@@ -66,6 +68,7 @@ ${EDITOR:-vi} .env
 docker compose --env-file .env -f infra/compose.yaml up -d --wait
 docker compose --env-file .env -f infra/compose.yaml exec postgres psql -U pawspot -d pawspot -c 'SELECT PostGIS_Version();'
 uv sync --locked --package pawspot-backend --extra dev
+uv run --locked --package pawspot-backend --extra dev alembic -c backend/alembic.ini upgrade head
 uv run --locked --package pawspot-backend --extra dev uvicorn pawspot.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -79,6 +82,7 @@ uv run --locked --package pawspot-backend --extra dev ruff check backend
 uv run --locked --package pawspot-backend --extra dev ruff format --check backend
 uv run --locked --package pawspot-backend --extra dev mypy
 uv run --locked --package pawspot-backend --extra dev pytest -m integration
+uv lock --check
 ```
 
 Если меняли `PAWSPOT_DB_USER` или `PAWSPOT_DB_NAME` в `.env`, замените их и в команде `psql -U ... -d ...`. Переменные инициализации БД действуют только при создании пустого volume; изменение `.env` после первого запуска не меняет существующую роль или пароль в PostgreSQL.
@@ -98,4 +102,6 @@ docker compose --env-file .env -f infra/compose.yaml start postgres
 
 ## Сейчас реализовано
 
-`GET /health` проверяет живость FastAPI без обращения к БД. `GET /ready` выполняет `SELECT PostGIS_Version()` и возвращает версию PostGIS либо 503 при SQLAlchemy/DB ошибке. Тайм-аут подключения задаётся `PAWSPOT_DB_CONNECT_TIMEOUT_SECONDS` (по умолчанию 3). `/docs` содержит только эти маршруты. Обычный `pytest` не запускает интеграционный тест, требующий БД; после запуска Compose выполните `pytest -m integration`. CI запускает обе группы с PostgreSQL/PostGIS service. Следующий этап — только после отдельного подтверждения владельца.
+`GET /health` проверяет живость FastAPI без обращения к БД. `GET /ready` выполняет `SELECT PostGIS_Version()` и возвращает версию PostGIS либо 503 при SQLAlchemy/DB ошибке. Тайм-аут подключения задаётся `PAWSPOT_DB_CONNECT_TIMEOUT_SECONDS` (по умолчанию 3). `/docs` содержит только эти маршруты. Alembic создаёт шесть доменных таблиц, PostGIS extension и seed Тбилиси; повторный `upgrade head` безопасен. Для проверки отката на одноразовой БД: `uv run --locked --package pawspot-backend --extra dev alembic -c backend/alembic.ini downgrade base`, затем снова `upgrade head`. **Downgrade удаляет доменные таблицы и данные.**
+
+Геоприватность использует фиксированную сетку; радиус задаётся `PAWSPOT_PUBLIC_LOCATION_RADIUS_M` (default 200 м), смена параметра после появления опубликованных встреч требует отдельной миграции и анализа приватности. Точные точки не входят в публичную схему `EncounterPublic`, в том числе для автора. Обычный `pytest` не запускает интеграционные тесты; после миграции выполните `pytest -m integration`. CI проверяет upgrade/downgrade, constraints и PostGIS на реальной БД. Переход к Phase 3 требует отдельного подтверждения владельца.

@@ -38,5 +38,8 @@ jobs:
       - run: uv run --locked --package pawspot-backend --extra dev ruff check backend
       - run: uv run --locked --package pawspot-backend --extra dev ruff format --check backend
       - run: uv run --locked --package pawspot-backend --extra dev mypy
+      - run: uv run --locked --package pawspot-backend --extra dev alembic -c backend/alembic.ini upgrade head
+      - run: uv run --locked --package pawspot-backend --extra dev alembic -c backend/alembic.ini downgrade base
+      - run: uv run --locked --package pawspot-backend --extra dev alembic -c backend/alembic.ini upgrade head
       - run: uv run --locked --package pawspot-backend --extra dev pytest -m integration
       - run: uv run --locked --package pawspot-backend --extra dev python -c "from pawspot.db import get_postgis_version, get_engine; print(get_postgis_version(get_engine()))"
