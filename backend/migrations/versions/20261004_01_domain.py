@@ -1,6 +1,7 @@
 """Initial domain schema and Tbilisi seed."""
 
 from collections.abc import Sequence
+from uuid import UUID
 
 import sqlalchemy as sa
 from alembic import op
@@ -270,7 +271,7 @@ def upgrade() -> None:
             "VALUES (:id, 'tbilisi', 'Tbilisi', 'GE', 41.7151, 44.8271, "
             "'Asia/Tbilisi', 25000) "
             "ON CONFLICT (slug) DO NOTHING"
-        ).bindparams(id=TBILISI_ID)
+        ).bindparams(sa.bindparam("id", UUID(TBILISI_ID), type_=postgresql.UUID()))
     )
 
 
