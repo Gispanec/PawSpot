@@ -15,6 +15,24 @@ class Settings(BaseSettings):
     db_password: SecretStr
     db_connect_timeout_seconds: int = Field(default=3, ge=1, le=30)
     public_location_radius_m: int = Field(default=200, ge=50, le=2000)
+    telegram_bot_token: SecretStr | None = None
+    internal_service_token: SecretStr | None = None
+    allowed_telegram_ids: str = ""
+    cors_origins: str = ""
+    auth_init_data_max_age_seconds: int = Field(default=300, ge=30, le=3600)
+    auth_session_hours: int = Field(default=12, ge=1, le=168)
+
+    @property
+    def allowlist(self) -> frozenset[int]:
+        return frozenset(
+            int(item.strip())
+            for item in self.allowed_telegram_ids.split(",")
+            if item.strip()
+        )
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
 
     @property
     def database_url(self) -> URL:
@@ -27,6 +45,16 @@ class Settings(BaseSettings):
             database=self.db_name,
             query={"connect_timeout": str(self.db_connect_timeout_seconds)},
         )
+
+
+class CorsSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="PAWSPOT_", env_file=".env")
+
+    cors_origins: str = ""
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
 
 
 @lru_cache

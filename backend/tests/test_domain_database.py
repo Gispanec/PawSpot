@@ -39,6 +39,7 @@ def test_migration_schema_and_seed() -> None:
     tables = set(inspect(engine).get_table_names())
     assert {
         "alembic_version",
+        "auth_sessions",
         "users",
         "cities",
         "photos",
@@ -55,7 +56,7 @@ def test_migration_schema_and_seed() -> None:
         )
         assert (
             connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261004_01"
+            == "20261004_02"
         )
         assert (
             connection.scalar(
