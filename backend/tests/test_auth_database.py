@@ -1,3 +1,4 @@
+import base64
 from uuid import uuid4
 
 import pytest
@@ -63,7 +64,9 @@ def test_login_allowlist_sessions_and_internal_actor() -> None:
             internal_headers = {
                 "X-Pawspot-Service-Token": "internal-test-secret",
                 "X-Pawspot-Telegram-Id": str(telegram_id),
-                "X-Pawspot-Display-Name": "Иван",
+                "X-Pawspot-Display-Name-B64": base64.urlsafe_b64encode(
+                    "Иван".encode()
+                ).decode(),
             }
             assert (
                 client.get(

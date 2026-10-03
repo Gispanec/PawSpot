@@ -1,3 +1,5 @@
+import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -153,7 +155,7 @@ def get_internal_actor(
     settings: Annotated[Settings, Depends(get_settings)],
     x_pawspot_service_token: str | None = Header(default=None),
     x_pawspot_telegram_id: int | None = Header(default=None),
-    x_pawspot_display_name: str | None = Header(default=None),
+    x_pawspot_display_name_b64: str | None = Header(default=None),
 ) -> User:
     configured = settings.internal_service_token
     if (
@@ -168,9 +170,19 @@ def get_internal_actor(
     if x_pawspot_telegram_id is None or x_pawspot_telegram_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid Telegram actor")
     require_allowed(x_pawspot_telegram_id, settings)
+    display_name = "Telegram user"
+    if x_pawspot_display_name_b64 is not None:
+        if len(x_pawspot_display_name_b64) > 256:
+            raise HTTPException(status_code=400, detail="Invalid display name")
+        try:
+            display_name = base64.b64decode(
+                x_pawspot_display_name_b64, altchars=b"-_", validate=True
+            ).decode("utf-8")
+        except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+            raise HTTPException(status_code=400, detail="Invalid display name") from exc
     identity = TelegramIdentity(
         id=x_pawspot_telegram_id,
-        first_name=(x_pawspot_display_name or "Telegram user")[:64],
+        first_name=display_name[:64],
     )
     actor = upsert_user(session, identity)
     session.commit()
