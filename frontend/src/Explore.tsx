@@ -3,7 +3,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { ApiClient } from './api'
 import { Info, PageHeading, Stat } from './Feed'
-import { animalName, dateLabel, groupMarkers, type MapMarker } from './models'
+import { animalName, dateLabel, groupMarkers, type MapFocus, type MapMarker } from './models'
 import { go } from './navigation'
 import { Photo } from './Photo'
 
@@ -25,13 +25,19 @@ interface ProfileView {
   dogs: number
 }
 
-export function MapPage({ api }: { api: ApiClient | null }) {
+interface MapSelection {
+  items: (MapMarker | MapFocus)[]
+  focusedEncounter: boolean
+}
+
+export function MapPage({ api, focus }: { api: ApiClient | null; focus: MapFocus | null }) {
   const element = useRef<HTMLDivElement>(null)
   const [map, setMap] = useState<L.Map | null>(null)
   const [markers, setMarkers] = useState<MapMarker[]>([])
-  const [selected, setSelected] = useState<MapMarker[]>([])
+  const [selected, setSelected] = useState<MapSelection | null>(null)
   const [species, setSpecies] = useState<'all' | 'cat' | 'dog'>('all')
   const [error, setError] = useState(false)
+  const visibleFocus = focus && (species === 'all' || species === focus.species) ? focus : null
   useEffect(() => {
     if (!element.current) return
     const instance = L.map(element.current).setView([41.7151, 44.8271], 12)
@@ -64,28 +70,42 @@ export function MapPage({ api }: { api: ApiClient | null }) {
     return () => { active = false; map.off('moveend', load) }
   }, [map, api, species])
   useEffect(() => {
+    if (!map || !focus) return
+    map.setView([focus.approximate_latitude, focus.approximate_longitude], 15)
+    setSelected({ items: [focus], focusedEncounter: true })
+  }, [map, focus])
+  useEffect(() => {
     if (!map) return
     const layer = L.layerGroup().addTo(map)
     for (const group of groupMarkers(markers)) {
       const first = group[0]
+      const highlighted = selected?.items.some(item => item.animal_public_id === first.animal_public_id && item.approximate_latitude === first.approximate_latitude && item.approximate_longitude === first.approximate_longitude) ?? false
       L.circleMarker([first.approximate_latitude, first.approximate_longitude], {
-        radius: group.length > 1 ? 12 : 9,
-        color: '#fff', weight: 2, fillColor: '#3f7755', fillOpacity: 1,
-      }).on('click', () => setSelected(group)).addTo(layer)
+        radius: highlighted ? 15 : group.length > 1 ? 12 : 9,
+        color: '#fff', weight: highlighted ? 3 : 2, fillColor: highlighted ? '#d8794a' : '#3f7755', fillOpacity: 1,
+      }).on('click', () => setSelected({ items: group, focusedEncounter: false })).addTo(layer)
+    }
+    if (visibleFocus) {
+      L.circleMarker([visibleFocus.approximate_latitude, visibleFocus.approximate_longitude], {
+        radius: 15, color: '#fff', weight: 3, fillColor: '#d8794a', fillOpacity: 1,
+      }).on('click', () => setSelected({ items: [visibleFocus], focusedEncounter: true })).addTo(layer)
     }
     return () => { layer.remove() }
-  }, [map, markers])
+  }, [map, markers, selected, visibleFocus])
   return <>
     <PageHeading title="Карта" subtitle="Город полон знакомых мордочек" />
     <div className="filter-row" aria-label="Фильтр животных">
-      {([['all', 'Все'], ['cat', 'Коты'], ['dog', 'Собаки']] as const).map(([value, label]) => <button key={value} className={species === value ? 'selected' : ''} type="button" onClick={() => { setSpecies(value); setSelected([]) }}>{label}</button>)}
+      {([['all', 'Все'], ['cat', 'Коты'], ['dog', 'Собаки']] as const).map(([value, label]) => <button key={value} className={species === value ? 'selected' : ''} type="button" onClick={() => { setSpecies(value); setSelected(null) }}>{label}</button>)}
     </div>
     <div ref={element} className="map-canvas" aria-label="Карта приблизительных мест встреч" />
     <p className="map-note">Метки показывают приблизительную область встречи, а не точное место.</p>
     {error && <Info>Не удалось загрузить метки. Передвиньте карту и попробуйте ещё раз.</Info>}
     {!api && <Info>Откройте PawSpot через Telegram, чтобы увидеть животных на карте.</Info>}
-    {api && !error && markers.length === 0 && <Info>В этой области пока нет встреч. Попробуйте переместить карту.</Info>}
-    {selected.length > 0 && <div className="map-selection"><h2>Здесь встречали</h2>{selected.map(item => <button type="button" className="map-animal" key={item.animal_public_id} onClick={() => go(`/animal/${item.animal_public_id}`)}><Photo api={api} id={item.photo_public_id} alt={animalName(item.name, item.species)} className="map-thumbnail" /><span><strong>{animalName(item.name, item.species)}</strong><small>{item.species === 'cat' ? 'Кот' : 'Собака'} · {item.city_name}</small><small>{item.encounter_count} встреч · {dateLabel(item.last_observed_at)}</small></span><span>→</span></button>)}</div>}
+    {api && !error && markers.length === 0 && !visibleFocus && <Info>В этой области пока нет встреч. Попробуйте переместить карту.</Info>}
+    {selected && <div className="map-selection" role="region" aria-label="Выбранная точка на карте">
+      <div className="map-selection-heading"><strong>{selected.focusedEncounter ? 'Выбранная встреча' : 'Здесь встречали'}</strong><button type="button" onClick={() => setSelected(null)} aria-label="Закрыть карточку на карте">✕</button></div>
+      <div className="map-selection-list">{selected.items.map(item => <button type="button" className="map-animal" key={item.encounter_public_id} onClick={() => go(selected.focusedEncounter ? `/encounter/${item.encounter_public_id}` : `/animal/${item.animal_public_id}`)}><Photo api={api} id={item.photo_public_id} alt={animalName(item.name, item.species)} className="map-thumbnail" /><span><strong>{animalName(item.name, item.species)}</strong><small>{item.species === 'cat' ? 'Кот' : 'Собака'} · {item.city_name}</small><small>{'encounter_count' in item && !selected.focusedEncounter ? `${item.encounter_count} встреч · ` : ''}{dateLabel(item.last_observed_at)}</small></span><b>Открыть →</b></button>)}</div>
+    </div>}
   </>
 }
 

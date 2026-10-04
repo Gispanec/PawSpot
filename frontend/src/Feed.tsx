@@ -2,7 +2,15 @@ import { useEffect, useState } from 'react'
 import type { ApiClient } from './api'
 import { go } from './navigation'
 import { Photo } from './Photo'
-import { animalName, dateLabel, type AnimalDetail, type EncounterCard, type Page } from './models'
+import { PhotoViewer } from './PhotoViewer'
+import { animalName, dateLabel, mapFocusFromEncounter, type AnimalDetail, type EncounterCard, type Page } from './models'
+
+function EncounterLocation({ item }: { item: EncounterCard }) {
+  const focus = mapFocusFromEncounter(item)
+  const label = `📍 ${item.city_name}${focus ? ' · приблизительное место' : ''}`
+  if (!focus) return <p className="location">{label}</p>
+  return <button className="text-link location location-link" type="button" onClick={() => go('/map', focus)} aria-label={`Показать встречу на карте: ${item.city_name}`}>{label} →</button>
+}
 
 export function EncounterTile({ api, item, onReaction }: {
   api: ApiClient | null
@@ -10,17 +18,20 @@ export function EncounterTile({ api, item, onReaction }: {
   onReaction?: (item: EncounterCard) => void
 }) {
   const name = animalName(item.animal_name, item.species)
+  const [viewerOpen, setViewerOpen] = useState(false)
   return <article className="encounter-card">
-    <button className="photo-button" type="button" onClick={() => go(`/encounter/${item.public_id}`)} aria-label={`Открыть встречу с ${name}`}>
+    <button className="photo-button" type="button" onClick={() => setViewerOpen(true)} aria-label={`Посмотреть полное фото: ${name}`}>
       <Photo api={api} id={item.photo_public_id} alt={name} className="encounter-photo" />
     </button>
     <div className="card-body">
       <div className="card-meta"><span>{item.species === 'cat' ? 'КОТ' : 'СОБАКА'}</span><span>{dateLabel(item.observed_at)}</span></div>
       <button className="text-link card-title" type="button" onClick={() => go(`/animal/${item.animal_public_id}`)}>{name} <span aria-hidden="true">↗</span></button>
-      <p className="location">⌖ {item.city_name}{item.approximate_latitude !== null ? ' · приблизительное место' : ''}</p>
+      <EncounterLocation item={item} />
       {item.comment && <p className="comment">{item.comment}</p>}
+      <button className="text-link card-detail-link" type="button" onClick={() => go(`/encounter/${item.public_id}`)}>Открыть встречу →</button>
       <div className="card-footer"><span>Встретил(а) {item.author_name}</span><button className={`reaction ${item.liked_by_me ? 'selected' : ''}`} type="button" onClick={() => onReaction?.(item)} disabled={!onReaction || item.is_mine} aria-label={item.is_mine ? 'Своя встреча' : item.liked_by_me ? 'Убрать лайк' : 'Поставить лайк'}>♥ {item.reaction_count}</button></div>
     </div>
+    {viewerOpen && <PhotoViewer api={api} id={item.photo_public_id} alt={name} onClose={() => setViewerOpen(false)} />}
   </article>
 }
 
@@ -74,6 +85,7 @@ export function Info({ children }: { children: React.ReactNode }) {
 }
 
 export function AnimalPage({ api, id }: { api: ApiClient | null; id: string }) {
+  const [viewerOpen, setViewerOpen] = useState(false)
   const [animal, setAnimal] = useState<AnimalDetail | null>(null)
   const [items, setItems] = useState<EncounterCard[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
@@ -106,7 +118,8 @@ export function AnimalPage({ api, id }: { api: ApiClient | null; id: string }) {
   }
   return <>
     <button className="back-link" type="button" onClick={() => go('/feed')}>← К ленте</button>
-    <div className="hero-card"><Photo api={api} id={animal.primary_photo_public_id} variant="main" alt={name} className="hero-photo" /><div className="hero-copy"><div className="eyebrow">{animal.species === 'cat' ? 'ГОРОДСКОЙ КОТ' : 'ГОРОДСКАЯ СОБАКА'}</div><h1>{name}</h1><p>⌖ {animal.city_name || 'Город неизвестен'}</p></div></div>
+    <div className="hero-card"><button className="photo-button" type="button" onClick={() => setViewerOpen(true)} aria-label={`Посмотреть полное фото: ${name}`}><Photo api={api} id={animal.primary_photo_public_id} variant="main" alt={name} className="hero-photo" /></button><div className="hero-copy"><div className="eyebrow">{animal.species === 'cat' ? 'ГОРОДСКОЙ КОТ' : 'ГОРОДСКАЯ СОБАКА'}</div><h1>{name}</h1><p>⌖ {animal.city_name || 'Город неизвестен'}</p></div></div>
+    {viewerOpen && animal.primary_photo_public_id && <PhotoViewer api={api} id={animal.primary_photo_public_id} alt={name} onClose={() => setViewerOpen(false)} />}
     <div className="stats-row"><Stat number={animal.encounter_count} label="встреч" /><Stat number={animal.photo_count} label="фото" /><Stat number={animal.observer_count} label="наблюдателей" /><Stat number={animal.reaction_count} label="♥" /></div>
     <p className="muted">Первым встретил(а) {animal.created_by_name}{animal.first_observed_at ? ` · ${dateLabel(animal.first_observed_at)}` : ''}</p>
     <h2>История встреч</h2>
@@ -116,6 +129,7 @@ export function AnimalPage({ api, id }: { api: ApiClient | null; id: string }) {
 }
 
 export function EncounterPage({ api, id }: { api: ApiClient | null; id: string }) {
+  const [viewerOpen, setViewerOpen] = useState(false)
   const [item, setItem] = useState<EncounterCard | null>(null)
   const [error, setError] = useState(false)
   useEffect(() => {
@@ -136,9 +150,10 @@ export function EncounterPage({ api, id }: { api: ApiClient | null; id: string }
   }
   return <>
     <button className="back-link" type="button" onClick={() => go(`/animal/${item.animal_public_id}`)}>← К истории</button>
-    <Photo api={api} id={item.photo_public_id} variant="main" alt={name} className="detail-photo" />
+    <button className="photo-button detail-photo-button" type="button" onClick={() => setViewerOpen(true)} aria-label={`Посмотреть полное фото: ${name}`}><Photo api={api} id={item.photo_public_id} variant="main" alt={name} className="detail-photo" /></button>
+    {viewerOpen && <PhotoViewer api={api} id={item.photo_public_id} alt={name} onClose={() => setViewerOpen(false)} />}
     <div className="eyebrow">ВСТРЕЧА · {dateLabel(item.observed_at)}</div>
-    <h1>{name}</h1><p className="location">⌖ {item.city_name} · приблизительное место</p>
+    <h1>{name}</h1><EncounterLocation item={item} />
     {item.comment && <p className="detail-comment">{item.comment}</p>}
     <p className="muted">Встретил(а) {item.author_name}</p>
     <button className={`reaction ${item.liked_by_me ? 'selected' : ''}`} type="button" onClick={react} disabled={item.is_mine}>{item.liked_by_me ? '♥ Нравится' : '♡ Нравится'} · {item.reaction_count}</button>

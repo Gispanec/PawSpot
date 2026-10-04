@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { bootstrapSession, type AppSession } from './session'
-import { currentPath, go, tabForPath, type Tab } from './navigation'
+import { currentMapFocus, currentPath, go, tabForPath, type Tab } from './navigation'
 import { AnimalPage, EncounterPage, Feed, Info } from './Feed'
 import { CollectionPage, MapPage, ProfilePage } from './Explore'
 import { telegramApp } from './telegram'
@@ -16,10 +16,11 @@ const tabs: { id: Tab; label: string; icon: string; path: string }[] = [
 export default function App() {
   const [session, setSession] = useState<AppSession | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [path, setPath] = useState(currentPath)
+  const [route, setRoute] = useState(() => ({ path: currentPath(), mapFocus: currentMapFocus() }))
+  const { path, mapFocus } = route
 
   useEffect(() => {
-    const onPop = () => setPath(currentPath())
+    const onPop = () => setRoute({ path: currentPath(), mapFocus: currentMapFocus() })
     const onExpired = () => setError('Сессия истекла. Закройте и откройте PawSpot через Telegram заново.')
     window.addEventListener('popstate', onPop)
     window.addEventListener('pawspot-auth-expired', onExpired)
@@ -57,7 +58,7 @@ export default function App() {
       {animalId ? <AnimalPage api={session.api} id={animalId} /> :
         encounterId ? <EncounterPage api={session.api} id={encounterId} /> :
         active === 'feed' ? <Feed api={session.api} preview={session.mode === 'preview'} /> :
-        active === 'map' ? <MapPage api={session.api} /> :
+        active === 'map' ? <MapPage api={session.api} focus={mapFocus} /> :
         active === 'collection' ? <CollectionPage api={session.api} /> :
         active === 'profile' ? <ProfilePage api={session.api} previewName={session.profile.display_name} /> :
         <Info>Этот экран скоро появится.</Info>}

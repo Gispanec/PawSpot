@@ -49,6 +49,23 @@ export interface MapMarker {
   approximate_longitude: number
 }
 
+export type MapFocus = Omit<MapMarker, 'encounter_count'>
+
+export function mapFocusFromEncounter(item: EncounterCard): MapFocus | null {
+  if (item.approximate_latitude === null || item.approximate_longitude === null) return null
+  return {
+    animal_public_id: item.animal_public_id,
+    encounter_public_id: item.public_id,
+    name: item.animal_name,
+    species: item.species,
+    photo_public_id: item.photo_public_id,
+    last_observed_at: item.observed_at,
+    city_name: item.city_name,
+    approximate_latitude: item.approximate_latitude,
+    approximate_longitude: item.approximate_longitude,
+  }
+}
+
 export function groupMarkers(markers: MapMarker[]): MapMarker[][] {
   const groups = new Map<string, MapMarker[]>()
   for (const marker of markers) {
