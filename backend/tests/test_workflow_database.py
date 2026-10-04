@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from pydantic import SecretStr
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from pawspot.config import Settings, get_settings
 from pawspot.db import get_engine
@@ -206,6 +207,67 @@ def test_new_existing_no_geo_matching_and_privacy(tmp_path: Path) -> None:
             )
             assert collection.status_code == 200
             assert len(collection.json()) == 1
+            with get_engine().connect() as connection:
+                assert connection.scalar(text("SELECT count(*) FROM animals")) == 1
+                assert connection.scalar(text("SELECT count(*) FROM encounters")) == 3
+
+            with get_engine().begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE encounters SET observed_at = "
+                        "now() - interval '120 days'"
+                    )
+                )
+            old_matches_draft = create_draft(client, actor_headers)
+            old_matches_draft = upload(client, actor_headers, old_matches_draft)
+            old_matches_draft = patch(
+                client, actor_headers, old_matches_draft, species="dog"
+            )
+            old_matches_draft = patch(
+                client,
+                actor_headers,
+                old_matches_draft,
+                location={"latitude": 41.7151, "longitude": 44.8271},
+            )
+            old_matches = client.post(
+                f"/internal/v1/encounter-drafts/{old_matches_draft['public_id']}/matches",
+                headers=actor_headers,
+            )
+            assert old_matches.status_code == 200
+            assert old_matches.json() == []
+            assert (
+                client.delete(
+                    f"/internal/v1/encounter-drafts/{old_matches_draft['public_id']}",
+                    headers=actor_headers,
+                ).status_code
+                == 204
+            )
+
+            rollback_draft = create_draft(client, actor_headers)
+            rollback_draft = upload(client, actor_headers, rollback_draft)
+            rollback_draft = patch(client, actor_headers, rollback_draft, species="dog")
+            rollback_draft = patch(client, actor_headers, rollback_draft, location=None)
+            rollback_draft = patch(
+                client, actor_headers, rollback_draft, new_animal={"name": "Rollback"}
+            )
+            with get_engine().begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE encounter_drafts SET photo_id = "
+                        "CAST(:photo_id AS uuid) "
+                        "WHERE id = CAST(:id AS uuid)"
+                    ),
+                    {
+                        "photo_id": first["photo_public_id"],
+                        "id": rollback_draft["public_id"],
+                    },
+                )
+            with pytest.raises(IntegrityError):
+                client.post(
+                    f"/internal/v1/encounter-drafts/{rollback_draft['public_id']}/commit",
+                    headers=actor_headers,
+                    json={"expected_version": rollback_draft["version"]},
+                )
             with get_engine().connect() as connection:
                 assert connection.scalar(text("SELECT count(*) FROM animals")) == 1
                 assert connection.scalar(text("SELECT count(*) FROM encounters")) == 3

@@ -1,7 +1,9 @@
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -22,6 +24,13 @@ app.include_router(public_router)
 app.include_router(internal_router)
 app.include_router(public_encounter_router)
 app.include_router(internal_encounter_router)
+
+
+@app.exception_handler(RequestValidationError)
+def sanitized_validation_error(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": "Invalid request"})
 
 
 @app.get("/health")
