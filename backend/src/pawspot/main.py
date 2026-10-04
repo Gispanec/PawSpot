@@ -12,6 +12,7 @@ from pawspot.api.encounters import internal_router as internal_encounter_router
 from pawspot.api.encounters import public_router as public_encounter_router
 from pawspot.api.read import router as read_router
 from pawspot.api.social import router as social_router
+from pawspot.api.today import router as today_router
 from pawspot.config import CorsSettings
 from pawspot.db import get_engine, get_postgis_version
 
@@ -28,6 +29,7 @@ app.include_router(public_encounter_router)
 app.include_router(internal_encounter_router)
 app.include_router(read_router)
 app.include_router(social_router)
+app.include_router(today_router)
 
 
 @app.exception_handler(RequestValidationError)

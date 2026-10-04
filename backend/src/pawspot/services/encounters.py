@@ -58,6 +58,8 @@ def draft_view(session: Session, draft: EncounterDraft) -> DraftView:
         new_name=draft.new_name,
         comment=draft.comment,
         city_name=city.name if city else None,
+        city_timezone=city.timezone if city else None,
+        observed_at=draft.observed_at,
         expires_at=draft.expires_at,
     )
 

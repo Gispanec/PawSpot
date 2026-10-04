@@ -40,6 +40,8 @@ class DraftView(BaseModel):
     new_name: str | None
     comment: str | None
     city_name: str | None
+    city_timezone: str | None
+    observed_at: datetime
     expires_at: datetime
 
 

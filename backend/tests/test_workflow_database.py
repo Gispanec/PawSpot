@@ -1,8 +1,10 @@
 import io
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -333,5 +335,126 @@ def test_new_animal_without_location_name_or_comment(tmp_path: Path) -> None:
             assert response.json()["animal_name"] is None
             assert response.json()["comment"] is None
             assert response.json()["approximate_latitude"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.integration
+def test_observed_time_and_today_encounter_feed(tmp_path: Path) -> None:
+    telegram_id = uuid4().int & ((1 << 52) - 1)
+    settings = Settings(
+        db_password=SecretStr(""),
+        internal_service_token=SecretStr("workflow-test-secret"),
+        allowed_telegram_ids=str(telegram_id),
+        media_dir=str(tmp_path),
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    actor = headers(telegram_id)
+    try:
+        with TestClient(app) as client:
+            url = "/internal/v1/feed/today"
+            assert client.get(url).status_code == 401
+            assert client.get(url, headers=actor, params={"page_size": 6}).status_code == 422
+            before = client.get(url, headers=actor).json()
+            first_animal: str | None = None
+            created: list[str] = []
+            for index in range(7):
+                draft = create_draft(client, actor)
+                original_time = datetime.fromisoformat(str(draft["observed_at"]))
+                assert abs((datetime.now(UTC) - original_time).total_seconds()) < 60
+                draft = upload(client, actor, draft)
+                species = "cat" if index == 5 else "dog"
+                draft = patch(client, actor, draft, species=species)
+                draft = patch(client, actor, draft, location=None)
+                if index in {0, 5}:
+                    draft = patch(
+                        client, actor, draft, new_animal={"name": f"Today {index}"}
+                    )
+                else:
+                    assert first_animal is not None
+                    draft = patch(client, actor, draft, animal_public_id=first_animal)
+                if index == 6:
+                    draft = patch(client, actor, draft, comment="Вчера у кафе")
+                    yesterday = datetime.now(ZoneInfo("Asia/Tbilisi")) - timedelta(
+                        days=1
+                    )
+                    draft = patch(
+                        client, actor, draft, observed_at=yesterday.isoformat()
+                    )
+                    assert draft["comment"] == "Вчера у кафе"
+                    assert draft["selection"] == "existing"
+                    draft = patch(
+                        client,
+                        actor,
+                        draft,
+                        location={"latitude": 41.7151, "longitude": 44.8271},
+                    )
+                    assert draft["comment"] == "Вчера у кафе"
+                    assert (
+                        datetime.fromisoformat(str(draft["observed_at"])) == yesterday
+                    )
+                    assert draft["location_present"] is True
+                    future = client.patch(
+                        f"/internal/v1/encounter-drafts/{draft['public_id']}",
+                        headers=actor,
+                        json={
+                            "expected_version": draft["version"],
+                            "observed_at": (
+                                datetime.now(UTC) + timedelta(days=1)
+                            ).isoformat(),
+                        },
+                    )
+                    assert future.status_code == 422
+                response = client.post(
+                    f"/internal/v1/encounter-drafts/{draft['public_id']}/commit",
+                    headers=actor,
+                    json={"expected_version": draft["version"]},
+                )
+                assert response.status_code == 201, response.text
+                result = response.json()
+                assert "private_location" not in response.text
+                if index == 0:
+                    first_animal = result["animal_public_id"]
+                if index == 6:
+                    with get_engine().connect() as connection:
+                        stored = connection.execute(
+                            text(
+                                "SELECT created_at, observed_at, "
+                                "ST_Y(private_location::geometry), "
+                                "ST_Y(public_location::geometry) "
+                                "FROM encounters WHERE id = CAST(:id AS uuid)"
+                            ),
+                            {"id": result["encounter_public_id"]},
+                        ).one()
+                    assert stored[0] - stored[1] > timedelta(hours=23)
+                    assert stored[2] == pytest.approx(41.7151)
+                    assert stored[3] != pytest.approx(41.7151)
+                else:
+                    created.append(result["encounter_public_id"])
+            after = client.get(url, headers=actor).json()
+            assert after["encounters"] == before["encounters"] + 6
+            assert after["dogs"] == before["dogs"] + 5
+            assert after["cats"] == before["cats"] + 1
+            assert after["first_animals"] == before["first_animals"] + 2
+            found: list[str] = []
+            for page_number in range(1, 3):
+                page = client.get(
+                    url, headers=actor, params={"page": page_number, "page_size": 5}
+                )
+                assert page.status_code == 200, page.text
+                assert "private_location" not in page.text
+                assert "telegram_id" not in page.text
+                assert len(page.json()["items"]) <= 5
+                found.extend(
+                    item["encounter_public_id"] for item in page.json()["items"]
+                )
+            assert set(created).issubset(set(found))
+            assert any(
+                item["repeat_encounter"]
+                for item in client.get(
+                    url, headers=actor, params={"page_size": 5}
+                ).json()["items"]
+                if item["animal_public_id"] == first_animal
+            )
     finally:
         app.dependency_overrides.clear()

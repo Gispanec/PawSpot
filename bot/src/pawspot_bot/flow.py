@@ -1,8 +1,10 @@
 import asyncio
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramAPIError
@@ -12,6 +14,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -23,6 +26,7 @@ from pawspot_bot.backend_client import BackendClient, BackendError
 logger = logging.getLogger(__name__)
 ADD = "📸 Добавить встречу"
 ABOUT = "ℹ️ О PawSpot"
+TODAY = "🐾 Сегодня встретили"
 SKIP = "Пропустить"
 
 
@@ -69,7 +73,10 @@ class BotFlow:
 
     def menu(self) -> ReplyKeyboardMarkup:
         return ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=ADD)], [KeyboardButton(text=ABOUT)]],
+            keyboard=[
+                [KeyboardButton(text=ADD)],
+                [KeyboardButton(text=TODAY), KeyboardButton(text=ABOUT)],
+            ],
             resize_keyboard=True,
         )
 
@@ -156,6 +163,123 @@ class BotFlow:
     def prompt_key(self, draft: dict[str, Any], step: str) -> tuple[str, int, str]:
         return str(draft["public_id"]), int(draft["version"]), step
 
+    def observed_label(self, draft: dict[str, Any]) -> str:
+        zone = ZoneInfo(draft["city_timezone"])
+        moment = datetime.fromisoformat(draft["observed_at"]).astimezone(zone)
+        today = datetime.now(zone).date()
+        day = moment.date()
+        prefix = (
+            "Сегодня"
+            if day == today
+            else "Вчера"
+            if day == today - timedelta(days=1)
+            else moment.strftime("%d.%m.%Y")
+        )
+        return f"{prefix}, {moment:%H:%M}"
+
+    async def ask_location(self, user_id: int, draft: dict[str, Any]) -> None:
+        choices = [
+            ("📍 Я ещё здесь", choice("here", draft)),
+            ("🗺 Указать другое место", choice("elsewhere", draft)),
+            ("⏭ Без места", choice("noloc", draft)),
+        ]
+        if draft["state"] == "ready":
+            choices.append(("Оставить место", choice("keepplace", draft)))
+        await self.say(
+            user_id,
+            "📍 Где вы встретили животное? Выберите текущую точку, "
+            "отправьте другое место на карте или продолжите без места.",
+            reply_markup=buttons(*choices),
+        )
+
+    async def today(self, user_id: int, name: str) -> None:
+        self.pending.pop(user_id, None)
+        self.last_prompt.pop(user_id, None)
+        page = await self.backend.today(user_id, name)
+        await self.say(
+            user_id,
+            "🐾 Сегодня в PawSpot\n"
+            f"Встреч: {page['encounters']}\n"
+            f"🐕 Собаки: {page['dogs']}\n"
+            f"🐈 Кошки: {page['cats']}\n"
+            f"✨ Впервые добавлено животных: {page['first_animals']}",
+        )
+        if page["items"]:
+            await self.today_card(user_id, name, page, edit_message_id=None)
+        else:
+            await self.say(user_id, "Сегодня встреч пока нет.")
+
+    async def today_card(
+        self, user_id: int, name: str, page: dict[str, Any], edit_message_id: int | None
+    ) -> None:
+        item = page["items"][0]
+        title = item["animal_name"] or "Без имени"
+        species = "🐕 Собака" if item["species"] == "dog" else "🐈 Кот"
+        zone = ZoneInfo(page["timezone"])
+        observed = datetime.fromisoformat(item["observed_at"]).astimezone(zone)
+        caption = f"{species} · {title}\n🕒 {observed:%H:%M}"
+        if item["repeat_encounter"]:
+            caption += "\n🔁 Повторная встреча"
+        if item["location_present"]:
+            caption += f"\n📍 {item['city_name']} · приблизительное место"
+        if item["comment"]:
+            caption += f"\n💬 {item['comment'][:200]}"
+        total = page["encounters"]
+        index = page["page"]
+        navigation = []
+        if index > 1:
+            navigation.append(
+                InlineKeyboardButton(text="◀️ Назад", callback_data=f"today:{index - 1}")
+            )
+        navigation.append(
+            InlineKeyboardButton(text=f"{index} / {total}", callback_data="today:noop")
+        )
+        if index < total:
+            navigation.append(
+                InlineKeyboardButton(text="Далее ▶️", callback_data=f"today:{index + 1}")
+            )
+        markup_rows = [navigation]
+        if self.mini_app_url:
+            base = urlsplit(self.mini_app_url)
+            encounter_url = urlunsplit(
+                (
+                    base.scheme,
+                    base.netloc,
+                    f"/encounter/{item['encounter_public_id']}",
+                    "",
+                    "",
+                )
+            )
+            markup_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="🐾 Открыть в PawSpot",
+                        web_app=WebAppInfo(url=encounter_url),
+                    )
+                ]
+            )
+        markup = InlineKeyboardMarkup(inline_keyboard=markup_rows)
+        photo = await self.backend.photo(
+            str(item["photo_public_id"]), user_id, name, variant="main"
+        )
+        if edit_message_id is None:
+            await self.bot.send_photo(
+                user_id,
+                BufferedInputFile(photo, filename="today.jpg"),
+                caption=caption,
+                reply_markup=markup,
+            )
+        else:
+            await self.bot.edit_message_media(
+                chat_id=user_id,
+                message_id=edit_message_id,
+                media=InputMediaPhoto(
+                    media=BufferedInputFile(photo, filename="today.jpg"),
+                    caption=caption,
+                ),
+                reply_markup=markup,
+            )
+
     async def render(self, user_id: int, name: str, draft: dict[str, Any]) -> None:
         state = draft["state"]
         if self.last_prompt.get(user_id) == self.prompt_key(draft, state):
@@ -174,22 +298,7 @@ class BotFlow:
                 ),
             )
         elif state == "need_location_or_skip":
-            await self.say(
-                user_id,
-                "Где вы его встретили? Можно пропустить.",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard=[
-                        [
-                            KeyboardButton(
-                                text="📍 Отправить геолокацию", request_location=True
-                            )
-                        ],
-                        [KeyboardButton(text=SKIP)],
-                    ],
-                    resize_keyboard=True,
-                    one_time_keyboard=True,
-                ),
-            )
+            await self.ask_location(user_id, draft)
         elif state == "choose_animal":
             candidates = (
                 await self.backend.matches(draft, user_id, name)
@@ -268,22 +377,19 @@ class BotFlow:
         key = self.prompt_key(draft, "ready")
         if self.last_prompt.get(user_id) == key:
             return
-        kind = "собака" if draft["species"] == "dog" else "кот"
+        kind = "🐕 Собака" if draft["species"] == "dog" else "🐈 Кот"
         animal = draft["new_name"] or "без имени"
         if draft["selection"] == "existing":
             animal = draft.get("selected_animal_name") or "без имени"
         selection = "новое" if draft["selection"] == "new" else "уже встречали"
-        location = (
-            f"{draft.get('city_name') or 'город'} · приблизительное место"
-            if draft["location_present"]
-            else "не указано"
-        )
+        location = "Место указано" if draft["location_present"] else "Без места"
+        observed = self.observed_label(draft)
         caption = (
             "Проверьте встречу перед сохранением:\n"
-            f"Животное: {selection} — {animal}\n"
-            f"Вид: {kind}\n"
-            f"Место: {location}\n"
-            f"Заметка: {draft['comment'] or 'нет'}"
+            f"{kind} · {animal} ({selection})\n"
+            f"🕒 {observed}\n"
+            f"📍 {location}\n"
+            f"💬 {draft['comment'] or 'Без заметки'}"
         )
         rows = [("✅ Сохранить", choice("save", draft))]
         if draft["selection"] == "new":
@@ -291,6 +397,8 @@ class BotFlow:
         rows.extend(
             [
                 ("Заметка", choice("comment", draft)),
+                ("Изменить время", choice("time", draft)),
+                ("Изменить место", choice("place", draft)),
                 ("Отменить", choice("cancel", draft)),
             ]
         )
@@ -349,7 +457,11 @@ class BotFlow:
         if draft is None:
             await self.say(user_id, "Сначала добавьте встречу.")
             return
-        if draft["state"] != "need_location_or_skip":
+        editing = draft["state"] == "ready" and self.pending.get(user_id) in {
+            "current_location",
+            "manual_location",
+        }
+        if draft["state"] != "need_location_or_skip" and not editing:
             await self.render(user_id, name, draft)
             return
         position = (
@@ -358,6 +470,7 @@ class BotFlow:
             else None
         )
         draft = await self.backend.patch(draft, user_id, name, location=position)
+        self.pending.pop(user_id, None)
         await self.say(
             user_id,
             "Место принято." if position else "Место пропущено.",
@@ -373,6 +486,34 @@ class BotFlow:
             return
         if draft["state"] == "need_location_or_skip" and value == SKIP:
             await self.location(user_id, name, None, None)
+            return
+        if field == "manual_location":
+            await self.say(
+                user_id,
+                "Отправьте точку через скрепку → Геопозиция → Выбрать место "
+                "на карте. Или вернитесь к preview.",
+            )
+            return
+        if draft["state"] == "ready" and field == "time_manual":
+            try:
+                zone = ZoneInfo(draft["city_timezone"])
+                moment = datetime.strptime(value.strip(), "%d.%m.%Y %H:%M").replace(
+                    tzinfo=zone
+                )
+                if moment > datetime.now(zone) + timedelta(minutes=5):
+                    raise ValueError("Future time")
+            except ValueError, KeyError, TypeError:
+                await self.say(
+                    user_id,
+                    "Введите прошедшие дату и время в формате "
+                    "ДД.ММ.ГГГГ ЧЧ:ММ, например 03.10.2026 15:20.",
+                )
+                return
+            draft = await self.backend.patch(
+                draft, user_id, name, observed_at=moment.isoformat()
+            )
+            self.pending.pop(user_id, None)
+            await self.confirm(user_id, name, draft)
             return
         if draft["state"] == "ready" and field in {"name_initial", "name_edit"}:
             if draft["selection"] != "new":
@@ -394,6 +535,7 @@ class BotFlow:
                 await self.say(user_id, "Заметка слишком длинная. До 500 символов.")
                 return
             draft = await self.backend.patch(draft, user_id, name, comment=value)
+            self.pending.pop(user_id, None)
             await self.confirm(user_id, name, draft)
         else:
             await self.render(user_id, name, draft)
@@ -450,6 +592,19 @@ class BotFlow:
 
     async def callback(self, callback: CallbackQuery, user_id: int, name: str) -> None:
         data = callback.data or ""
+        if data.startswith("today:"):
+            if data == "today:noop":
+                return
+            try:
+                page_number = int(data.removeprefix("today:"))
+            except ValueError:
+                return
+            if page_number < 1 or page_number > 10000 or callback.message is None:
+                return
+            page = await self.backend.today(user_id, name, page_number)
+            if page["items"]:
+                await self.today_card(user_id, name, page, callback.message.message_id)
+            return
         parts = data.split(":", 3)
         if len(parts) != 4 or parts[0] not in {
             "species",
@@ -465,6 +620,16 @@ class BotFlow:
             "comment",
             "save",
             "cancel",
+            "here",
+            "elsewhere",
+            "noloc",
+            "place",
+            "keepplace",
+            "time",
+            "time_today",
+            "time_yesterday",
+            "time_manual",
+            "time_keep",
         }:
             return
         action, draft_marker, version_text, value = parts
@@ -494,6 +659,81 @@ class BotFlow:
         if not version_text.isdigit() or int(version_text) != draft["version"]:
             await self.say(user_id, "Эта кнопка устарела. Показываю актуальный шаг.")
             await self.render(user_id, name, draft)
+            return
+        if action == "place" and draft["state"] == "ready":
+            await self.ask_location(user_id, draft)
+            self.last_prompt[user_id] = self.prompt_key(draft, "place")
+            return
+        if action == "keepplace" and draft["state"] == "ready":
+            self.pending.pop(user_id, None)
+            await self.confirm(user_id, name, draft)
+            return
+        if action == "here" and draft["state"] in {"need_location_or_skip", "ready"}:
+            self.pending[user_id] = "current_location"
+            await self.say(
+                user_id,
+                "Отправьте текущее местоположение, если вы ещё на месте встречи.",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[
+                        [
+                            KeyboardButton(
+                                text="📍 Отправить текущую точку", request_location=True
+                            )
+                        ]
+                    ],
+                    resize_keyboard=True,
+                    one_time_keyboard=True,
+                ),
+            )
+            return
+        if action == "elsewhere" and draft["state"] in {
+            "need_location_or_skip",
+            "ready",
+        }:
+            self.pending[user_id] = "manual_location"
+            await self.say(
+                user_id,
+                "Откройте скрепку Telegram → Геопозиция → Выбрать место на карте "
+                "и отправьте точку, где была встреча. Не нажимайте "
+                "«Отправить мою геопозицию».",
+                reply_markup=self.menu(),
+            )
+            return
+        if action == "noloc" and draft["state"] in {"need_location_or_skip", "ready"}:
+            await self.location_without_place(user_id, name, draft)
+            return
+        if action == "time" and draft["state"] == "ready":
+            await self.say(
+                user_id,
+                f"Сейчас: {self.observed_label(draft)}. Когда вы встретили животное?",
+                reply_markup=buttons(
+                    ("Сегодня · сейчас", choice("time_today", draft)),
+                    ("Вчера · в это время", choice("time_yesterday", draft)),
+                    ("Ввести дату и время", choice("time_manual", draft)),
+                    ("Оставить время", choice("time_keep", draft)),
+                ),
+            )
+            self.last_prompt[user_id] = self.prompt_key(draft, "time")
+            return
+        if action in {"time_today", "time_yesterday"} and draft["state"] == "ready":
+            zone = ZoneInfo(draft["city_timezone"])
+            now = datetime.now(zone)
+            moment = now if action == "time_today" else now - timedelta(days=1)
+            draft = await self.backend.patch(
+                draft, user_id, name, observed_at=moment.isoformat()
+            )
+            await self.confirm(user_id, name, draft)
+            return
+        if action == "time_manual" and draft["state"] == "ready":
+            self.pending[user_id] = "time_manual"
+            await self.say(
+                user_id,
+                "Введите дату и время встречи: ДД.ММ.ГГГГ ЧЧ:ММ "
+                "(время города встречи). Например: 03.10.2026 15:20.",
+            )
+            return
+        if action == "time_keep" and draft["state"] == "ready":
+            await self.confirm(user_id, name, draft)
             return
         if (
             action == "species"
@@ -540,6 +780,14 @@ class BotFlow:
             await self.ask_comment(user_id, draft)
         else:
             await self.render(user_id, name, draft)
+
+    async def location_without_place(
+        self, user_id: int, name: str, draft: dict[str, Any]
+    ) -> None:
+        draft = await self.backend.patch(draft, user_id, name, location=None)
+        self.pending.pop(user_id, None)
+        await self.say(user_id, "Продолжаем без места.", reply_markup=self.menu())
+        await self.render(user_id, name, draft)
 
     async def result(self, user_id: int, name: str, result: dict[str, Any]) -> None:
         species = "🐕" if result["species"] == "dog" else "🐈"
@@ -599,6 +847,15 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
             return
         try:
             await flow.add(message.from_user.id, message.from_user.full_name)
+        except BackendError as exc:
+            await flow.error(message.from_user.id, exc)
+
+    @router.message(F.text == TODAY, F.chat.type == "private")
+    async def today(message: Message) -> None:
+        if message.from_user is None:
+            return
+        try:
+            await flow.today(message.from_user.id, message.from_user.full_name)
         except BackendError as exc:
             await flow.error(message.from_user.id, exc)
 

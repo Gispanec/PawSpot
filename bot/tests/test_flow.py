@@ -10,7 +10,7 @@ from aiogram import Bot
 from aiogram.types import File, Update
 
 from pawspot_bot.backend_client import BackendClient, BackendError
-from pawspot_bot.flow import ABOUT, ADD, BotFlow, choice, create_dispatcher
+from pawspot_bot.flow import ABOUT, ADD, TODAY, BotFlow, choice, create_dispatcher
 from pawspot_bot.main import configure_menu_button
 
 
@@ -22,6 +22,7 @@ class FakeBackend:
         self.candidates = candidates
         self.events: list[str] = []
         self.fail_upload: int | None = None
+        self.today_pages: list[int] = []
 
     async def current(self, user_id: int, name: str) -> dict[str, Any] | None:
         return self.draft if self.draft and self.draft["state"] != "committed" else None
@@ -36,6 +37,8 @@ class FakeBackend:
                 "species": None,
                 "location_present": False,
                 "city_name": "Tbilisi",
+                "city_timezone": "Asia/Tbilisi",
+                "observed_at": datetime.now(UTC).isoformat(),
                 "selection": None,
                 "selected_animal_name": None,
                 "new_name": None,
@@ -64,7 +67,8 @@ class FakeBackend:
             draft["state"] = "need_location_or_skip"
         if "location" in fields:
             draft["location_present"] = fields["location"] is not None
-            draft["state"] = "choose_animal"
+            if draft["selection"] is None:
+                draft["state"] = "choose_animal"
         if "new_animal" in fields:
             draft["selection"] = "new"
             draft["new_name"] = fields["new_animal"].get("name")
@@ -75,6 +79,8 @@ class FakeBackend:
             draft["state"] = "ready"
         if "comment" in fields:
             draft["comment"] = fields["comment"]
+        if "observed_at" in fields:
+            draft["observed_at"] = fields["observed_at"]
         draft["version"] += 1
         self.events.extend(fields)
         return draft
@@ -132,6 +138,32 @@ class FakeBackend:
     ) -> bytes:
         return variant.encode()
 
+    async def today(self, user_id: int, name: str, page: int = 1) -> dict[str, Any]:
+        self.today_pages.append(page)
+        return {
+            "timezone": "Asia/Tbilisi",
+            "encounters": 51,
+            "dogs": 50,
+            "cats": 1,
+            "first_animals": 2,
+            "page": page,
+            "page_size": 1,
+            "items": [
+                {
+                    "encounter_public_id": str(uuid4()),
+                    "animal_public_id": str(uuid4()),
+                    "animal_name": "Гиви",
+                    "species": "dog",
+                    "photo_public_id": str(uuid4()),
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "comment": "У пекарни",
+                    "city_name": "Tbilisi",
+                    "location_present": True,
+                    "repeat_encounter": page > 1,
+                }
+            ],
+        }
+
 
 class Harness:
     def __init__(self, backend: FakeBackend) -> None:
@@ -143,6 +175,7 @@ class Harness:
         self.markups: list[Any] = []
         self.sent_photos: list[bytes] = []
         self.sequence = 0
+        self.edited_media: list[Any] = []
 
     async def send_message(self, chat_id: int, text: str, **kwargs: Any) -> None:
         self.messages.append(text)
@@ -152,6 +185,11 @@ class Harness:
         self.sent_photos.append(photo.data)
         self.messages.append(kwargs["caption"])
         self.markups.append(kwargs.get("reply_markup"))
+
+    async def edit_message_media(self, **kwargs: Any) -> None:
+        self.edited_media.append(kwargs)
+        self.messages.append(kwargs["media"].caption)
+        self.markups.append(kwargs["reply_markup"])
 
     async def get_file(self, file_id: str) -> File:
         return File(file_id=file_id, file_unique_id="unique", file_path="/x")
@@ -262,7 +300,8 @@ def test_telegram_happy_paths(actions: str, candidates: bool) -> None:
     assert b"main" in harness.sent_photos
     assert any("Встреча сохранена" in message for message in harness.messages)
     assert harness.markups[-1].keyboard[0][0].text == ADD
-    assert harness.markups[-1].keyboard[1][0].text == ABOUT
+    assert harness.markups[-1].keyboard[1][0].text == TODAY
+    assert harness.markups[-1].keyboard[1][1].text == ABOUT
     assert ("matches" in backend.events) == ("no_location" not in actions)
     assert ("collection" in backend.events) == ("no_location" in actions)
     assert backend.draft is not None
@@ -423,7 +462,7 @@ def test_about_and_help_keep_inline_mini_app_link() -> None:
             harness.bot, "send_message", side_effect=harness.send_message
         ):
             await harness.feed(text="/start")
-            assert harness.markups[0].keyboard[1][0].text == ABOUT
+            assert harness.markups[0].keyboard[1][1].text == ABOUT
             await harness.feed(text=ABOUT)
             assert "Точные координаты встречи не публикуются" in harness.messages[-1]
             assert harness.markups[-1].inline_keyboard[0][0].web_app.url == (
@@ -472,7 +511,7 @@ def test_candidates_show_photo_and_existing_animal_in_preview() -> None:
     assert any("Возможно, его уже встречали" in text for text in harness.messages)
     assert any("Последняя встреча: 03.10.2026" in text for text in harness.messages)
     assert any("всего встреч: 3" in text for text in harness.messages)
-    assert any("Животное: уже встречали — Гиви" in text for text in harness.messages)
+    assert any("Гиви (уже встречали)" in text for text in harness.messages)
     assert harness.sent_photos.count(b"main") == 2  # кандидат и итоговый preview
     assert all("private_location" not in text for text in harness.messages)
 
@@ -484,7 +523,7 @@ def test_candidate_can_be_rejected_as_new_animal() -> None:
     assert backend.draft["selection"] == "new"
     assert backend.draft["new_name"] == "Бондо"
     assert any("Возможно, его уже встречали" in text for text in harness.messages)
-    assert any("Животное: новое — Бондо" in text for text in harness.messages)
+    assert any("Бондо (новое)" in text for text in harness.messages)
 
 
 def test_candidate_without_photo_cannot_be_confirmed_as_match() -> None:
@@ -544,9 +583,9 @@ def test_new_animal_name_and_note_can_be_kept_changed_or_cleared() -> None:
             await harness.feed(text="У пекарни")
             draft = backend.draft
             assert draft is not None
-            assert "Животное: новое — Бондо" in harness.messages[-1]
-            assert "Место: Tbilisi · приблизительное место" in harness.messages[-1]
-            assert "Заметка: У пекарни" in harness.messages[-1]
+            assert "Бондо (новое)" in harness.messages[-1]
+            assert "📍 Место указано" in harness.messages[-1]
+            assert "💬 У пекарни" in harness.messages[-1]
             assert "41.71" not in harness.messages[-1]
 
             await harness.feed(callback=harness.button("Имя"))
@@ -558,7 +597,7 @@ def test_new_animal_name_and_note_can_be_kept_changed_or_cleared() -> None:
             await harness.feed(text="Гиви")
             assert draft["new_name"] == "Гиви"
             assert draft["comment"] == "У пекарни"
-            assert "Животное: новое — Гиви" in harness.messages[-1]
+            assert "Гиви (новое)" in harness.messages[-1]
 
             await harness.feed(callback=harness.button("Заметка"))
             assert "Текущая заметка: У пекарни" in harness.messages[-1]
@@ -571,7 +610,7 @@ def test_new_animal_name_and_note_can_be_kept_changed_or_cleared() -> None:
             await harness.feed(callback=harness.button("Заметка"))
             await harness.feed(callback=harness.button("Удалить заметку"))
             assert draft["comment"] is None
-            assert "Заметка: нет" in harness.messages[-1]
+            assert "💬 Без заметки" in harness.messages[-1]
 
             save = harness.button("✅ Сохранить")
             await harness.feed(callback=save)
@@ -608,7 +647,92 @@ def test_draft_values_survive_new_bot_flow_instance() -> None:
             patch.object(second.bot, "send_photo", side_effect=second.send_photo),
         ):
             await second.feed(text="/start")
-            assert "Животное: новое — Бондо" in second.messages[-1]
-            assert "Заметка: У пекарни" in second.messages[-1]
+            assert "Бондо (новое)" in second.messages[-1]
+            assert "💬 У пекарни" in second.messages[-1]
+
+    asyncio.run(run())
+
+
+def test_delayed_encounter_time_and_place_edits_preserve_draft() -> None:
+    async def run() -> None:
+        backend = FakeBackend()
+        harness = Harness(backend)
+        with (
+            patch.object(harness.bot, "send_message", side_effect=harness.send_message),
+            patch.object(harness.bot, "send_photo", side_effect=harness.send_photo),
+            patch.object(harness.bot, "get_file", side_effect=harness.get_file),
+            patch.object(
+                harness.bot, "download_file", side_effect=harness.download_file
+            ),
+            patch.object(Bot, "__call__", new_callable=AsyncMock),
+        ):
+            await harness.feed(text=ADD)
+            await harness.feed(photo=True)
+            await harness.feed(callback=harness.button("🐕 Собака"))
+            assert "Где вы встретили животное" in harness.messages[-1]
+            await harness.feed(callback=harness.button("🗺 Указать другое место"))
+            assert "Выбрать место на карте" in harness.messages[-1]
+            await harness.feed(location=True)
+            await harness.feed(callback=harness.button("🆕 Нет, это новое животное"))
+            await harness.feed(text="Бондо")
+            await harness.feed(text="У пекарни")
+            assert "🕒 Сегодня" in harness.messages[-1]
+            await harness.feed(callback=harness.button("Изменить время"))
+            await harness.feed(callback=harness.button("Вчера · в это время"))
+            assert "🕒 Вчера" in harness.messages[-1]
+            await harness.feed(callback=harness.button("Изменить время"))
+            await harness.feed(callback=harness.button("Ввести дату и время"))
+            await harness.feed(text="31.12.2099 15:20")
+            assert "Введите прошедшие дату" in harness.messages[-1]
+            await harness.feed(text="03.10.2026 15:20")
+            assert "15:20" in harness.messages[-1]
+            await harness.feed(callback=harness.button("Изменить место"))
+            assert harness.button("Оставить место")
+            await harness.feed(callback=harness.button("⏭ Без места"))
+            assert "📍 Без места" in harness.messages[-1]
+            assert backend.draft is not None
+            assert backend.draft["new_name"] == "Бондо"
+            assert backend.draft["comment"] == "У пекарни"
+            assert backend.draft["location_present"] is False
+            assert backend.draft["observed_at"].startswith("2026-10-03")
+
+    asyncio.run(run())
+
+
+def test_today_feed_uses_one_editable_photo_card_for_51_encounters() -> None:
+    async def run() -> None:
+        backend = FakeBackend()
+        harness = Harness(backend)
+        harness.flow.mini_app_url = "https://pawspot.example/app"
+        with (
+            patch.object(harness.bot, "send_message", side_effect=harness.send_message),
+            patch.object(harness.bot, "send_photo", side_effect=harness.send_photo),
+            patch.object(
+                harness.bot,
+                "edit_message_media",
+                side_effect=harness.edit_message_media,
+            ),
+            patch.object(Bot, "__call__", new_callable=AsyncMock),
+        ):
+            await harness.feed(text=TODAY)
+            assert "Встреч: 51" in harness.messages[0]
+            assert "Собаки: 50" in harness.messages[0]
+            assert "Кошки: 1" in harness.messages[0]
+            assert "Впервые добавлено животных: 2" in harness.messages[0]
+            assert "1 / 51" == harness.markups[-1].inline_keyboard[0][0].text
+            assert (
+                harness.markups[-1]
+                .inline_keyboard[1][0]
+                .web_app.url.startswith("https://pawspot.example/encounter/")
+            )
+            await harness.feed(callback="today:2")
+            assert backend.today_pages == [1, 2]
+            assert len(harness.sent_photos) == 1
+            assert len(harness.edited_media) == 1
+            assert "🔁 Повторная встреча" in harness.messages[-1]
+            assert "2 / 51" in [
+                button.text for button in harness.markups[-1].inline_keyboard[0]
+            ]
+            assert "private_location" not in "".join(harness.messages)
 
     asyncio.run(run())

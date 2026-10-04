@@ -118,6 +118,14 @@ class BackendClient:
             ),
         )
 
+    async def today(self, user_id: int, name: str, page: int = 1) -> dict[str, Any]:
+        return cast(
+            dict[str, Any],
+            await self.request(
+                "GET", f"/internal/v1/feed/today?page={page}&page_size=1", user_id, name
+            ),
+        )
+
     async def commit(
         self, draft: dict[str, Any], user_id: int, name: str
     ) -> dict[str, Any]:

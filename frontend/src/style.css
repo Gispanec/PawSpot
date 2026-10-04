@@ -41,6 +41,8 @@ h1 { font-size: clamp(32px, 9vw, 48px); line-height: 1.05; letter-spacing: -.06e
 .reaction { min-height: 44px; border: 1px solid #efd5cc; border-radius: 20px; padding: 8px 13px; background: #fff8f3; color: #a45c54; cursor: pointer; font-weight: 700; }
 .reaction.selected { background: #ee746d; color: white; border-color: #ee746d; }
 .reaction:disabled { opacity: .6; cursor: default; }
+.reaction-own { display: inline-grid; gap: 2px; color: var(--tg-theme-hint-color, #79847c); font-weight: 700; text-align: right; }
+.reaction-own small { font-size: 11px; font-weight: 400; }
 .primary-button { display: block; margin: 24px auto; border: 0; border-radius: 20px; padding: 13px 22px; background: #2c6b4e; color: white; font-weight: 700; cursor: pointer; }
 .back-link { display: block; min-height: 44px; margin: 3px 0 18px; padding: 10px 0; color: #2c6b4e; font-weight: 700; }
 .hero-photo { display: block; width: 100%; max-height: 420px; aspect-ratio: 4 / 3; object-fit: contain; background: #e7ece4; }

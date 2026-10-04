@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { EncounterTile } from './Feed'
+import { EncounterTile, toggleLike } from './Feed'
 import { PhotoViewer } from './PhotoViewer'
 import type { EncounterCard } from './models'
+import type { ApiClient } from './api'
 
 const encounter: EncounterCard = {
   public_id: 'encounter', animal_public_id: 'animal', animal_name: 'Гиви',
@@ -31,5 +32,30 @@ describe('просмотр встречи', () => {
     expect(html).toContain('aria-modal="true"')
     expect(html).toContain('Закрыть фото')
     expect(html).toContain('viewer-image')
+  })
+
+  it('объясняет запрет лайка собственной встречи без активной кнопки', () => {
+    const html = renderToStaticMarkup(<EncounterTile api={null} item={encounter} onReaction={() => undefined} />)
+    expect(html).toContain('Своя встреча · оценивать нельзя')
+    expect(html).not.toContain('aria-label="Поставить лайк"')
+  })
+
+  it('показывает интерактивные состояния лайка чужой встречи', () => {
+    const other = { ...encounter, is_mine: false }
+    const empty = renderToStaticMarkup(<EncounterTile api={null} item={other} onReaction={() => undefined} />)
+    expect(empty).toContain('aria-label="Поставить лайк"')
+    expect(empty).toContain('♡ 0')
+    const liked = renderToStaticMarkup(<EncounterTile api={null} item={{ ...other, liked_by_me: true, reaction_count: 1 }} onReaction={() => undefined} />)
+    expect(liked).toContain('aria-label="Убрать лайк"')
+    expect(liked).toContain('♥ 1')
+  })
+
+  it('ставит и снимает лайк через существующий API', async () => {
+    const request = vi.fn().mockResolvedValueOnce({ liked_by_me: true, reaction_count: 1 }).mockResolvedValueOnce({ liked_by_me: false, reaction_count: 0 })
+    const api = { request } as unknown as ApiClient
+    const liked = await toggleLike(api, { ...encounter, is_mine: false })
+    expect(request).toHaveBeenNthCalledWith(1, '/encounters/encounter/like', { method: 'PUT' })
+    await toggleLike(api, { ...encounter, ...liked, is_mine: false })
+    expect(request).toHaveBeenNthCalledWith(2, '/encounters/encounter/like', { method: 'DELETE' })
   })
 })

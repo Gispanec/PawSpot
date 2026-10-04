@@ -5,11 +5,23 @@ import { Photo } from './Photo'
 import { PhotoViewer } from './PhotoViewer'
 import { animalName, dateLabel, mapFocusFromEncounter, type AnimalDetail, type EncounterCard, type Page } from './models'
 
+export function toggleLike(api: ApiClient, item: EncounterCard) {
+  return api.request<{ reaction_count: number; liked_by_me: boolean }>(
+    `/encounters/${item.public_id}/like`,
+    { method: item.liked_by_me ? 'DELETE' : 'PUT' },
+  )
+}
+
 function EncounterLocation({ item }: { item: EncounterCard }) {
   const focus = mapFocusFromEncounter(item)
   const label = `📍 ${item.city_name}${focus ? ' · приблизительное место' : ''}`
   if (!focus) return <p className="location">{label}</p>
   return <button className="text-link location location-link" type="button" onClick={() => go('/map', focus)} aria-label={`Показать встречу на карте: ${item.city_name}`}>{label} →</button>
+}
+
+function ReactionControl({ item, onReaction }: { item: EncounterCard; onReaction?: () => void }) {
+  if (item.is_mine) return <span className="reaction-own" title="Свою встречу оценивать нельзя">♥ {item.reaction_count}<small>Своя встреча · оценивать нельзя</small></span>
+  return <button className={`reaction ${item.liked_by_me ? 'selected' : ''}`} type="button" onClick={onReaction} disabled={!onReaction} aria-label={item.liked_by_me ? 'Убрать лайк' : 'Поставить лайк'}>{item.liked_by_me ? '♥' : '♡'} {item.reaction_count}</button>
 }
 
 export function EncounterTile({ api, item, onReaction }: {
@@ -29,7 +41,7 @@ export function EncounterTile({ api, item, onReaction }: {
       <EncounterLocation item={item} />
       {item.comment && <p className="comment">{item.comment}</p>}
       <button className="text-link card-detail-link" type="button" onClick={() => go(`/encounter/${item.public_id}`)}>Открыть встречу →</button>
-      <div className="card-footer"><span>Встретил(а) {item.author_name}</span><button className={`reaction ${item.liked_by_me ? 'selected' : ''}`} type="button" onClick={() => onReaction?.(item)} disabled={!onReaction || item.is_mine} aria-label={item.is_mine ? 'Своя встреча' : item.liked_by_me ? 'Убрать лайк' : 'Поставить лайк'}>♥ {item.reaction_count}</button></div>
+      <div className="card-footer"><span>Встретил(а) {item.author_name}</span><ReactionControl item={item} onReaction={onReaction ? () => onReaction(item) : undefined} /></div>
     </div>
     {viewerOpen && <PhotoViewer api={api} id={item.photo_public_id} alt={name} onClose={() => setViewerOpen(false)} />}
   </article>
@@ -61,7 +73,7 @@ export function Feed({ api, preview }: { api: ApiClient | null; preview: boolean
   async function react(item: EncounterCard) {
     if (!api) return
     try {
-      const result = await api.request<{ reaction_count: number; liked_by_me: boolean }>(`/encounters/${item.public_id}/like`, { method: item.liked_by_me ? 'DELETE' : 'PUT' })
+      const result = await toggleLike(api, item)
       setItems(current => current.map(candidate => candidate.public_id === item.public_id ? { ...candidate, ...result } : candidate))
     } catch { setError('Не удалось сохранить реакцию.') }
   }
@@ -111,7 +123,7 @@ export function AnimalPage({ api, id }: { api: ApiClient | null; id: string }) {
   }
   async function react(item: EncounterCard) {
     try {
-      const result = await api!.request<{ reaction_count: number; liked_by_me: boolean }>(`/encounters/${item.public_id}/like`, { method: item.liked_by_me ? 'DELETE' : 'PUT' })
+      const result = await toggleLike(api!, item)
       setItems(current => current.map(candidate => candidate.public_id === item.public_id ? { ...candidate, ...result } : candidate))
       setAnimal(current => current ? { ...current, reaction_count: current.reaction_count + (result.liked_by_me ? 1 : -1) } : current)
     } catch { setError(true) }
@@ -144,7 +156,7 @@ export function EncounterPage({ api, id }: { api: ApiClient | null; id: string }
   const name = animalName(item.animal_name, item.species)
   async function react() {
     try {
-      const result = await api!.request<{ reaction_count: number; liked_by_me: boolean }>(`/encounters/${id}/like`, { method: item!.liked_by_me ? 'DELETE' : 'PUT' })
+      const result = await toggleLike(api!, item!)
       setItem(current => current ? { ...current, ...result } : current)
     } catch { setError(true) }
   }
@@ -156,7 +168,7 @@ export function EncounterPage({ api, id }: { api: ApiClient | null; id: string }
     <h1>{name}</h1><EncounterLocation item={item} />
     {item.comment && <p className="detail-comment">{item.comment}</p>}
     <p className="muted">Встретил(а) {item.author_name}</p>
-    <button className={`reaction ${item.liked_by_me ? 'selected' : ''}`} type="button" onClick={react} disabled={item.is_mine}>{item.liked_by_me ? '♥ Нравится' : '♡ Нравится'} · {item.reaction_count}</button>
+    <ReactionControl item={item} onReaction={react} />
     <button className="text-link section-link" type="button" onClick={() => go(`/animal/${item.animal_public_id}`)}>Вся история {name} →</button>
   </>
 }
