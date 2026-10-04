@@ -6,7 +6,9 @@ from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="PAWSPOT_", env_file=".env")
+    model_config = SettingsConfigDict(
+        env_prefix="PAWSPOT_", env_file=".env", extra="ignore"
+    )
 
     db_host: str = "127.0.0.1"
     db_port: int = Field(default=5432, ge=1, le=65535)
@@ -56,7 +58,9 @@ class Settings(BaseSettings):
 
 
 class CorsSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="PAWSPOT_", env_file=".env")
+    model_config = SettingsConfigDict(
+        env_prefix="PAWSPOT_", env_file=".env", extra="ignore"
+    )
 
     cors_origins: str = ""
 

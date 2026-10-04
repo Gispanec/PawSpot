@@ -72,8 +72,11 @@ def test_stale_or_future_init_data_rejected(offset: int) -> None:
         )
 
 
-def test_allowlist_is_closed_by_default() -> None:
-    settings = Settings(db_password=SecretStr("test"))
+def test_allowlist_is_closed_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PAWSPOT_ALLOWED_TELEGRAM_IDS", raising=False)
+    settings = Settings(  # type: ignore[call-arg]
+        db_password=SecretStr("test"), _env_file=None
+    )
     assert not settings.allowlist
 
 
