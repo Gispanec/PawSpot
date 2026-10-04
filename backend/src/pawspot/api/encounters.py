@@ -110,6 +110,7 @@ def build_router(prefix: str, actor_dependency: Callable[..., User]) -> APIRoute
                     height=processed.height,
                 )
             )
+            session.flush()
             draft.photo_id = photo_id
             draft.version += 1
             session.commit()
