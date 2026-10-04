@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { EncounterTile, toggleLike } from './Feed'
+import { AnimalHistoryLink, EncounterTile, toggleLike } from './Feed'
 import { PhotoViewer } from './PhotoViewer'
 import type { EncounterCard } from './models'
 import type { ApiClient } from './api'
@@ -24,6 +24,12 @@ describe('просмотр встречи', () => {
   it('не предлагает карту, если у встречи нет публичной точки', () => {
     const html = renderToStaticMarkup(<EncounterTile api={null} item={{ ...encounter, approximate_latitude: null }} />)
     expect(html).not.toContain('Показать встречу на карте')
+  })
+
+  it('использует универсальный текст ссылки на историю животного', () => {
+    const html = renderToStaticMarkup(<AnimalHistoryLink animalId="animal" />)
+    expect(html).toContain('История встреч →')
+    expect(html).not.toContain('Вся история Грустинка')
   })
 
   it('открывает фото в отдельном viewer с явным закрытием', () => {

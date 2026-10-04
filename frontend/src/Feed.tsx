@@ -169,8 +169,12 @@ export function EncounterPage({ api, id }: { api: ApiClient | null; id: string }
     {item.comment && <p className="detail-comment">{item.comment}</p>}
     <p className="muted">Встретил(а) {item.author_name}</p>
     <ReactionControl item={item} onReaction={react} />
-    <button className="text-link section-link" type="button" onClick={() => go(`/animal/${item.animal_public_id}`)}>Вся история {name} →</button>
+    <AnimalHistoryLink animalId={item.animal_public_id} />
   </>
+}
+
+export function AnimalHistoryLink({ animalId }: { animalId: string }) {
+  return <button className="text-link section-link" type="button" onClick={() => go(`/animal/${animalId}`)}>История встреч →</button>
 }
 
 export function Stat({ number, label }: { number: number; label: string }) {

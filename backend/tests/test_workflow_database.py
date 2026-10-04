@@ -354,7 +354,10 @@ def test_observed_time_and_today_encounter_feed(tmp_path: Path) -> None:
         with TestClient(app) as client:
             url = "/internal/v1/feed/today"
             assert client.get(url).status_code == 401
-            assert client.get(url, headers=actor, params={"page_size": 6}).status_code == 422
+            assert (
+                client.get(url, headers=actor, params={"page_size": 6}).status_code
+                == 422
+            )
             before = client.get(url, headers=actor).json()
             first_animal: str | None = None
             created: list[str] = []

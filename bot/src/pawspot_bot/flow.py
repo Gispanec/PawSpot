@@ -1,6 +1,7 @@
 import asyncio
 import io
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -316,7 +317,7 @@ class BotFlow:
                     user_id,
                     heading,
                     reply_markup=buttons(
-                        ("🆕 Нет, это новое животное", choice("animal", draft, "new")),
+                        ("🆕 Создать новое животное", choice("animal", draft, "new")),
                         cancel,
                     ),
                 )
@@ -396,7 +397,10 @@ class BotFlow:
             rows.append(("Имя", choice("name", draft)))
         rows.extend(
             [
-                ("Заметка", choice("comment", draft)),
+                (
+                    "Изменить заметку" if draft["comment"] else "Добавить заметку",
+                    choice("comment", draft),
+                ),
                 ("Изменить время", choice("time", draft)),
                 ("Изменить место", choice("place", draft)),
                 ("Отменить", choice("cancel", draft)),
@@ -495,18 +499,32 @@ class BotFlow:
             )
             return
         if draft["state"] == "ready" and field == "time_manual":
-            try:
-                zone = ZoneInfo(draft["city_timezone"])
-                moment = datetime.strptime(value.strip(), "%d.%m.%Y %H:%M").replace(
-                    tzinfo=zone
-                )
-                if moment > datetime.now(zone) + timedelta(minutes=5):
-                    raise ValueError("Future time")
-            except ValueError, KeyError, TypeError:
+            value = value.strip()
+            if not re.fullmatch(
+                r"[0-9]{2}\.[0-9]{2}\.[0-9]{4} [0-9]{2}:[0-9]{2}", value
+            ):
                 await self.say(
                     user_id,
-                    "Введите прошедшие дату и время в формате "
-                    "ДД.ММ.ГГГГ ЧЧ:ММ, например 03.10.2026 15:20.",
+                    "❌ Не удалось распознать дату и время. "
+                    "Используйте формат ДД.ММ.ГГГГ ЧЧ:ММ. "
+                    "Например: 03.10.2026 15:20.",
+                )
+                return
+            try:
+                zone = ZoneInfo(draft["city_timezone"])
+                moment = datetime.strptime(value, "%d.%m.%Y %H:%M").replace(tzinfo=zone)
+            except ValueError:
+                await self.say(
+                    user_id,
+                    "❌ Такой даты или времени не существует. "
+                    "Проверьте день, месяц, часы и минуты.",
+                )
+                return
+            if moment > datetime.now(zone) + timedelta(minutes=5):
+                await self.say(
+                    user_id,
+                    "❌ Время встречи не может быть в будущем. "
+                    "Укажите время, когда вы уже встретили животное.",
                 )
                 return
             draft = await self.backend.patch(
