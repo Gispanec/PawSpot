@@ -1,6 +1,6 @@
 # PawSpot
 
-PawSpot — коллекция встреч с городскими котами и собаками. Реализован первый сценарий через Telegram Bot: фото → вид → место или пропуск → существующее или новое животное → необязательные имя и заметка → сохранение. Mini App и открытый доступ пока отсутствуют. Пилот закрыт для Telegram-пользователей из allowlist.
+PawSpot — коллекция встреч с городскими котами и собаками. Через Telegram Bot пользователь добавляет встречу: фото → вид → место или пропуск → существующее или новое животное → необязательные имя и заметка → сохранение. Telegram Mini App показывает ленту, историю животного, карту, реакции, коллекцию и профиль. Пилот закрыт для Telegram-пользователей из allowlist; открытого анонимного доступа нет.
 
 Документы: [продукт](docs/product.md), [архитектура](docs/architecture.md), [проект API](docs/api.md), [roadmap](docs/roadmap.md).
 
@@ -146,7 +146,9 @@ npm ci
 npm run dev
 ```
 
-`VITE_DEV_PREVIEW=true` включает только демонстрационный просмотр интерфейса в dev-сборке и не выдаёт backend-сессию. Для проверки реальных данных задайте `VITE_DEV_PREVIEW=false`, откройте Mini App из Telegram через HTTPS-адрес, настроенный в BotFather, и укажите тот же URL в `PAWSPOT_MINI_APP_URL` локального `.env` бота. Telegram требует HTTPS для URL Mini App; `localhost` в обычной вкладке не содержит подписанного `initData`. Vite перенаправляет `/api` на локальный backend. Если frontend и backend размещены на разных origin, задайте `VITE_API_BASE_URL` для frontend и конкретный origin в `PAWSPOT_CORS_ORIGINS` backend. В production frontend и `/api` удобно обслуживать с одного origin.
+`VITE_DEV_PREVIEW=true` включает только просмотр интерфейса без реальных данных в dev-сборке и не выдаёт backend-сессию. Для проверки реальных данных задайте `VITE_DEV_PREVIEW=false`, откройте Mini App из Telegram через HTTPS-адрес, настроенный в BotFather, и укажите тот же URL в `PAWSPOT_MINI_APP_URL` локального `.env` бота. Кнопка «🐾 Открыть PawSpot» появится в меню бота после его перезапуска. Telegram требует HTTPS для URL Mini App; `localhost` в обычной вкладке не содержит подписанного `initData`. Vite перенаправляет `/api` на локальный backend. Если frontend и backend размещены на разных origin, задайте `VITE_API_BASE_URL` для frontend и конкретный origin в `PAWSPOT_CORS_ORIGINS` backend. В production frontend и `/api` удобно обслуживать с одного origin; хостинг SPA должен возвращать `index.html` для `/animal/{uuid}` и `/encounter/{uuid}`. Тест на телефоне требует HTTPS-туннель или собственный домен с TLS, доступный с телефона; локальный preview не проверяет Telegram auth.
+
+Карта использует Leaflet. Стандартный URL тайлов OpenStreetMap подходит для малого теста при соблюдении attribution, но [правила использования OSM tiles](https://operations.osmfoundation.org/policies/tiles/) не дают SLA и запрещают массовые фоновые загрузки. Перед ростом пилота укажите разрешённый provider в `VITE_MAP_TILE_URL` и его attribution в `VITE_MAP_ATTRIBUTION` или свой tile server. Сейчас карта загружает видимую область при перемещении; сервер ограничивает bbox и 200 маркеров. Метки построены из `public_location`, приблизительной сетки (начально около 200 м); точные координаты не возвращаются даже автору. Совпадающие публичные точки группируются в карте. При нехватке слотов для 200 маркеров потребуется отдельная кластеризация/пагинация; для закрытого пилота это известное ограничение.
 
 Проверки frontend из каталога `frontend/`: `npm test`, `npm run typecheck`, `npm run build`.
 

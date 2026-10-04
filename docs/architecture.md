@@ -1,6 +1,6 @@
 # PawSpot: архитектура
 
-Статус: Phase 3–5 реализованы после утверждённых Phase 0–2. Backend содержит auth, draft workflow, фото и matching; Telegram Bot — отдельный HTTP-адаптер. Разделы про Mini App и последующие функции описывают будущие этапы.
+Статус: код Phase 0–8 реализован; live Telegram Android/iOS smoke test для Mini App ещё не выполнен. Backend содержит auth, draft workflow, фото, matching и защищённые read API для feed/animal/map/collection/reactions. Telegram Bot остаётся интерфейсом добавления, Mini App — интерфейсом просмотра и реакций. Разделы о merge, открытом sharing и deployment описывают будущие этапы; первоначальные проектные решения ниже не во всех деталях совпадают с текущим API, фактический контракт — в `docs/api.md`.
 
 ## 1. Архитектура и границы
 

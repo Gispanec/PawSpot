@@ -1,6 +1,6 @@
 # PawSpot: roadmap реализации
 
-Phases 0–2 утверждены владельцем. Владелец разрешил единый блок Phase 3 → 4 → 5 с проверкой каждого этапа. **Phase 6 автоматически не начинается.** Каждый этап — самостоятельное небольшое изменение. Примерные номера задают зависимости, не обещание календарных сроков.
+Phases 0–5 завершены. Владелец разрешил единый блок Phase 6 → 7 → 8. В нём Mini App отвечает за просмотр/реакции, а действующий Bot остаётся интерфейсом добавления встречи; Add-форма Mini App из первоначального плана не включена в этот блок. **Phase 9 автоматически не начинается.** Каждый этап — самостоятельное небольшое изменение. Примерные номера задают зависимости, не обещание календарных сроков.
 
 ## Правила каждого этапа
 
@@ -69,13 +69,13 @@ Backend/bot после bootstrap: pytest, Ruff check, Ruff format --check, mypy.
 
 ## Phase 6 — Mini App foundation and Add
 
-- **Цель:** второй клиент того же workflow.
+- **Цель:** визуальный клиент закрытого пилота для просмотра и реакций.
 - **Области:** frontend, auth integration, Telegram launch config/docs.
-- **Реализуем:** React/TS/Vite, Map | Feed | Add | Profile shell, Telegram theme/safe area/back button, session bootstrap, Add/upload/location permission/skip, продолжение draft, deep-link routing после auth. Пока неготовые экраны подписаны явно.
+- **Реализуем:** React/TS/Vite, Лента | Карта | Коллекция | Профиль, Telegram theme/safe area/back button, session bootstrap, маршруты `/animal/{uuid}` и `/encounter/{uuid}` после auth. Добавление встречи остаётся в работающем Bot flow по уточнённому заданию владельца.
 - **Не реализуем:** отдельную регистрацию, native apps, дизайн-систему большой платформы, копию backend validation rules как источник истины.
 - **Dependencies:** Phases 3–5, HTTPS development URL и настройка Main Mini App в BotFather.
-- **DoD:** lint/typecheck/build/tests; auth и Add работают в Telegram Android/iOS; отказ геолокации не блокирует сохранение; просроченный initData обрабатывается; Bot и Mini App возвращают один draft/result.
-- **Commit:** `feat: add Telegram Mini App foundation and encounter form`.
+- **DoD:** typecheck/build/tests; signed initData обменивается на bearer session, dev preview не отключает production auth; рабочий Bot flow остаётся доступным. Реальное открытие на Telegram Android/iOS требует HTTPS URL и отдельной проверки владельцем.
+- **Commit:** `feat: add Telegram Mini App foundation`.
 
 ## Phase 7 — Animal profiles and feed
 
@@ -91,10 +91,10 @@ Backend/bot после bootstrap: pytest, Ruff check, Ruff format --check, mypy.
 
 - **Цель:** исследование города и причина возвращаться.
 - **Области:** map/reactions/profile endpoints, Leaflet UI, tests.
-- **Реализуем:** bbox по последней public location Animal, карточки/группы одинаковых точек, configurable tiles + attribution, фильтр вида; idempotent reactions; профиль и уникальная коллекция/области.
+- **Реализуем:** bbox по последней public location Animal, карточки/группы одинаковых точек, configurable tiles + attribution, фильтр вида; idempotent reactions; профиль и уникальная коллекция. Подсчёт районов не входит в уточнённый owner scope Phase 8, потому что геосхема пока не содержит районов.
 - **Не реализуем:** новый matching algorithm (готов в Phase 4), live tracking, районы с полигонами, достижения, leaderboards, offline tiles.
 - **Dependencies:** Phase 7.
-- **DoD:** map никогда не использует private coordinate или старую точку вместо последней из-за bbox; reaction race tests и ограничения БД; self-reaction policy; уникальные animals/areas корректны; tile policy выполнена; mobile smoke test.
+- **DoD:** map никогда не использует private coordinate или старую точку вместо последней из-за bbox; reaction race tests и ограничения БД; self-reaction policy; уникальные animals корректны; tile policy задокументирована. Mobile Telegram smoke test остаётся внешней проверкой перед пилотом.
 - **Commit:** `feat: add map exploration reactions and collections`.
 
 ## Phase 9 — Merge, sharing and security hardening

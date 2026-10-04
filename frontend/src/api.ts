@@ -13,6 +13,11 @@ export class ApiError extends Error {
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
 
+function apiFailure(status: number, message: string): ApiError {
+  if (status === 401) window.dispatchEvent(new Event('pawspot-auth-expired'))
+  return new ApiError(status, message)
+}
+
 export async function exchangeInitData(initData: string): Promise<Session> {
   const response = await fetch(`${baseUrl}/api/v1/auth/telegram`, {
     method: 'POST',
@@ -20,7 +25,7 @@ export async function exchangeInitData(initData: string): Promise<Session> {
     body: JSON.stringify({ init_data: initData }),
     cache: 'no-store',
   })
-  if (!response.ok) throw new ApiError(response.status, 'Не удалось открыть PawSpot')
+  if (!response.ok) throw new ApiError(response.status, response.status === 401 ? 'Данные Telegram устарели. Закройте и откройте PawSpot заново.' : 'Не удалось открыть PawSpot')
   return response.json() as Promise<Session>
 }
 
@@ -35,7 +40,7 @@ export class ApiClient {
       headers,
       cache: 'no-store',
     })
-    if (!response.ok) throw new ApiError(response.status, 'Не удалось загрузить данные')
+    if (!response.ok) throw apiFailure(response.status, response.status === 401 ? 'Сессия истекла. Откройте PawSpot через Telegram заново.' : 'Не удалось загрузить данные')
     return response.json() as Promise<T>
   }
 
@@ -44,7 +49,7 @@ export class ApiClient {
       headers: { Authorization: `Bearer ${this.token}` },
       cache: 'no-store',
     })
-    if (!response.ok) throw new ApiError(response.status, 'Фото недоступно')
+    if (!response.ok) throw apiFailure(response.status, 'Фото недоступно')
     return response.blob()
   }
 }

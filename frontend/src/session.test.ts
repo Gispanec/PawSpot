@@ -45,4 +45,12 @@ describe('Mini App session', () => {
     expect((fetcher.mock.calls[0][1].headers as Headers).get('Authorization')).toBe('Bearer opaque-token')
     expect(new ApiError(401, 'x').status).toBe(401)
   })
+
+  it('reports an expired bearer session to the app shell', async () => {
+    const dispatchEvent = vi.fn()
+    vi.stubGlobal('window', { dispatchEvent })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401 }))
+    await expect(new ApiClient('expired').request('/feed')).rejects.toMatchObject({ status: 401 })
+    expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'pawspot-auth-expired' }))
+  })
 })
