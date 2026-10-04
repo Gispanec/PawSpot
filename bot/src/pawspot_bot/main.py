@@ -16,7 +16,9 @@ async def run() -> None:
         settings.bot_backend_url, settings.internal_service_token.get_secret_value()
     )
     try:
-        dispatcher = create_dispatcher(BotFlow(bot, backend, settings.max_photo_bytes))
+        dispatcher = create_dispatcher(
+            BotFlow(bot, backend, settings.max_photo_bytes, settings.mini_app_url)
+        )
         await dispatcher.start_polling(
             bot, allowed_updates=dispatcher.resolve_used_update_types()
         )

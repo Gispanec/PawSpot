@@ -349,3 +349,12 @@ def test_telegram_photo_download_failure_keeps_draft() -> None:
         assert backend.draft["state"] == "need_photo"
 
     asyncio.run(run())
+
+
+def test_mini_app_button_keeps_existing_add_flow() -> None:
+    harness = Harness(FakeBackend())
+    harness.flow.mini_app_url = "https://pawspot.example/app"
+    keyboard = harness.flow.menu().keyboard
+    assert keyboard[0][0].text == ADD
+    assert keyboard[1][0].web_app is not None
+    assert keyboard[1][0].web_app.url == "https://pawspot.example/app"

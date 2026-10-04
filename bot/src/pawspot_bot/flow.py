@@ -14,6 +14,7 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    WebAppInfo,
 )
 
 from pawspot_bot.backend_client import BackendClient, BackendError
@@ -44,16 +45,36 @@ def choice(action: str, draft: dict[str, Any], value: str = "") -> str:
 
 
 class BotFlow:
-    def __init__(self, bot: Bot, backend: BackendClient, max_photo_bytes: int) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        backend: BackendClient,
+        max_photo_bytes: int,
+        mini_app_url: str = "",
+    ) -> None:
         self.bot = bot
         self.backend = backend
         self.max_photo_bytes = max_photo_bytes
+        self.mini_app_url = mini_app_url
         # Только состояние текстового поля UI. Доменный draft хранится в backend.
         self.pending: dict[int, str] = {}
         self.delivered: dict[int, str] = {}
 
     async def say(self, user_id: int, text: str, **kwargs: Any) -> None:
         await self.bot.send_message(user_id, text, **kwargs)
+
+    def menu(self) -> ReplyKeyboardMarkup:
+        rows = [[KeyboardButton(text=ADD)]]
+        if self.mini_app_url:
+            rows.append(
+                [
+                    KeyboardButton(
+                        text="🐾 Открыть PawSpot",
+                        web_app=WebAppInfo(url=self.mini_app_url),
+                    )
+                ]
+            )
+        return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
     async def error(self, user_id: int, exc: BackendError) -> None:
         if exc.status_code == 403:
@@ -84,9 +105,7 @@ class BotFlow:
             await self.say(
                 user_id,
                 "Привет! Сохраним встречу с котом или собакой?",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard=[[KeyboardButton(text=ADD)]], resize_keyboard=True
-                ),
+                reply_markup=self.menu(),
             )
         else:
             await self.say(user_id, "Продолжим незавершённую встречу.")
@@ -375,9 +394,7 @@ class BotFlow:
         await self.say(
             user_id,
             "Чтобы добавить ещё одну встречу, нажмите кнопку ниже.",
-            reply_markup=ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text=ADD)]], resize_keyboard=True
-            ),
+            reply_markup=self.menu(),
         )
 
 

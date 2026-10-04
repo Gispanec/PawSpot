@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+from pydantic import SecretStr, ValidationError
 from pytest import MonkeyPatch
 
 from pawspot_bot.config import BotSettings
@@ -23,3 +25,13 @@ def test_bot_reads_shared_dotenv_with_backend_fields(
     settings = BotSettings(_env_file=env_file)  # type: ignore[call-arg]
     assert settings.bot_backend_url == "http://127.0.0.1:8000"
     assert settings.telegram_bot_token.get_secret_value() == "123456:test-token"
+
+
+def test_mini_app_url_requires_https() -> None:
+    with pytest.raises(ValidationError, match="Mini App URL must use HTTPS"):
+        BotSettings(
+            telegram_bot_token=SecretStr("123456:test-token"),
+            internal_service_token=SecretStr("test-service-token"),
+            mini_app_url="http://pawspot.example",
+            _env_file=None,
+        )  # type: ignore[call-arg]

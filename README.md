@@ -126,4 +126,28 @@ uv run --locked --all-packages --all-extras python -m pawspot_bot.main
 
 Откройте личный чат с ботом, отправьте `/start`, нажмите «📸 Добавить встречу» и отправьте фото. Бот предлагает вид, геолокацию или пропуск, кандидатов либо новое животное, затем необязательные имя и заметку. `/cancel` отменяет черновик; повтор `/start` продолжает его. Один polling-процесс должен работать с данным token. Реальный Telegram smoke test требует действительный token и участника в allowlist; в CI проверяются синтетические Telegram Update и backend/PostGIS без внешнего Telegram.
 
+## Mini App: локальная разработка
+
+Frontend использует Node.js 24, React, TypeScript и Vite. В Phase 6 каталог `frontend/` создан заново: до этого в репозитории его не было. Из корня репозитория в PowerShell:
+
+```powershell
+Copy-Item frontend/.env.example frontend/.env.local
+cd frontend
+npm ci
+npm run dev
+```
+
+POSIX:
+
+```sh
+cp frontend/.env.example frontend/.env.local
+cd frontend
+npm ci
+npm run dev
+```
+
+`VITE_DEV_PREVIEW=true` включает только демонстрационный просмотр интерфейса в dev-сборке и не выдаёт backend-сессию. Для проверки реальных данных задайте `VITE_DEV_PREVIEW=false`, откройте Mini App из Telegram через HTTPS-адрес, настроенный в BotFather, и укажите тот же URL в `PAWSPOT_MINI_APP_URL` локального `.env` бота. Telegram требует HTTPS для URL Mini App; `localhost` в обычной вкладке не содержит подписанного `initData`. Vite перенаправляет `/api` на локальный backend. Если frontend и backend размещены на разных origin, задайте `VITE_API_BASE_URL` для frontend и конкретный origin в `PAWSPOT_CORS_ORIGINS` backend. В production frontend и `/api` удобно обслуживать с одного origin.
+
+Проверки frontend из каталога `frontend/`: `npm test`, `npm run typecheck`, `npm run build`.
+
 Backend workflow добавления встречи доступен под `/api/v1/encounter-drafts` для Bearer-сессии и `/internal/v1/encounter-drafts` для бота с отдельным service token. `POST` создаёт или возвращает один активный draft, `PUT /{id}/photo` принимает multipart JPEG/PNG/WebP, `PATCH /{id}` сохраняет вид, локацию/skip и выбор животного, `POST /{id}/matches` ищет кандидатов, `POST /{id}/commit` атомарно создаёт Encounter. Первый commit возвращает 201, повтор — 200 с тем же UUID. `GET /encounters/{id}` и `GET /photos/{id}/{variant}` доступны только авторизованным участникам пилота. Точная локация отсутствует в этих ответах. Фото перекодируются в JPEG и хранятся вне публичной static-директории; исходники не сохраняются. Отменённые/просроченные черновики и старые осиротевшие фото очищаются командой `uv run --locked --all-packages --all-extras python -m pawspot.cli cleanup` (запускать по расписанию ОС). Радиус matching, период и число кандидатов заданы `PAWSPOT_MATCHING_*` в `.env.example`.
