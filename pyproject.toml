@@ -8,24 +8,24 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["backend"]
+members = ["backend", "bot"]
 
 [tool.ruff]
 target-version = "py314"
 line-length = 88
-src = ["backend/src", "backend/tests"]
+src = ["backend/src", "backend/tests", "bot/src", "bot/tests"]
 extend-exclude = [".tools"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["backend/tests"]
+testpaths = ["backend/tests", "bot/tests"]
 addopts = "-m 'not integration'"
 markers = ["integration: requires a running PostgreSQL with PostGIS"]
 
 [tool.mypy]
 python_version = "3.14"
 strict = true
-mypy_path = "backend/src"
-files = ["backend/src", "backend/tests"]
+mypy_path = "backend/src,bot/src"
+files = ["backend/src", "backend/tests", "bot/src", "bot/tests"]

@@ -64,7 +64,7 @@ Backend/bot после bootstrap: pytest, Ruff check, Ruff format --check, mypy.
 - **Реализуем:** polling, фото → вид → геолокация/skip → кандидаты/new → optional name/comment → результат; backend draft resume/cancel; timeout/retry; ограничения личным чатом. Карточка может существовать до готовности Mini App: бот показывает результат сам, web share landing честно сообщает доступность просмотра.
 - **Не реализуем:** webhook infrastructure, собственную БД/FSM бизнес-правил бота, групповые сценарии, Mini App.
 - **Dependencies:** Phase 4; созданный владельцем Telegram Bot и token в окружении для live smoke test.
-- **DoD:** synthetic Update tests и реальное прохождение на тестовом боте; restart resume, double click, старые callback, чужой draft, отмена, плохая сеть; замер 15–30 секунд с учётом сети. Без токена live-check обозначается как невыполненный, этап нельзя объявлять полностью проверенным.
+- **DoD:** synthetic Update tests; restart resume, double click, старые callback, отмена и ошибки сети; backend integration на PostgreSQL/PostGIS. Реальное прохождение на тестовом боте и замер 15–30 секунд выполняются владельцем после предоставления token; отсутствие token явно указывается как внешний smoke-test blocker, но не блокирует завершение реализации согласно решению владельца для текущего блока.
 - **Commit:** `feat: add Telegram Bot encounter flow`.
 
 ## Phase 6 — Mini App foundation and Add

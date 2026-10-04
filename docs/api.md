@@ -1,6 +1,6 @@
 # PawSpot: проект API
 
-Phase 0. Endpoints ниже ещё не реализованы. Prefix `/api/v1`; JSON; UUID в строках; даты ISO 8601 UTC. Авторизация — opaque Bearer session. Исключения: auth exchange и технический health. Для пилота весь контент и media требуют allowlist/session.
+Проект API и текущий контракт. Реализованы auth и маршруты encounter workflow; остальные строки таблицы относятся к следующим фазам. Prefix `/api/v1`; JSON; UUID в строках; даты ISO 8601 UTC. Авторизация — opaque Bearer session. Исключения: auth exchange и технический health. Для пилота весь контент и media требуют allowlist/session.
 
 ## Контракт и доступ
 

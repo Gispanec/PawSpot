@@ -1,0 +1,24 @@
+[project]
+name = "pawspot-bot"
+version = "0.1.0"
+description = "Telegram adapter for PawSpot"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+  "aiogram>=3.31,<3.32",
+  "httpx>=0.28,<0.29",
+  "pydantic-settings>=2.15,<2.16",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.1.1,<9.2",
+  "ruff>=0.16.10,<0.17",
+  "mypy>=2.4,<2.5",
+]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pawspot_bot"]

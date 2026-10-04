@@ -1,6 +1,6 @@
 # PawSpot
 
-PawSpot — коллекция встреч с городскими котами и собаками. Реализованы каркас Phase 1 и фундамент данных Phase 2. Пользовательский сценарий ещё не реализован: Bot, Mini App и создание встреч через API появятся в следующих этапах. Пилот закрыт для Telegram-пользователей из allowlist, share-ссылки не дают анонимного доступа.
+PawSpot — коллекция встреч с городскими котами и собаками. Реализован первый сценарий через Telegram Bot: фото → вид → место или пропуск → существующее или новое животное → необязательные имя и заметка → сохранение. Mini App и открытый доступ пока отсутствуют. Пилот закрыт для Telegram-пользователей из allowlist.
 
 Документы: [продукт](docs/product.md), [архитектура](docs/architecture.md), [проект API](docs/api.md), [roadmap](docs/roadmap.md).
 
@@ -36,9 +36,9 @@ notepad .env
 ```powershell
 docker compose --env-file .env -f infra/compose.yaml up -d --wait
 docker compose --env-file .env -f infra/compose.yaml exec postgres psql -U pawspot -d pawspot -c "SELECT PostGIS_Version();"
-uv sync --locked --package pawspot-backend --extra dev
-uv run --locked --package pawspot-backend --extra dev alembic -c backend/alembic.ini upgrade head
-uv run --locked --package pawspot-backend --extra dev uvicorn pawspot.main:app --host 127.0.0.1 --port 8000
+uv sync --locked --all-packages --all-extras
+uv run --locked --all-packages --all-extras alembic -c backend/alembic.ini upgrade head
+uv run --locked --all-packages --all-extras uvicorn pawspot.main:app --host 127.0.0.1 --port 8000
 ```
 
 В другой PowerShell-сессии:
@@ -46,11 +46,11 @@ uv run --locked --package pawspot-backend --extra dev uvicorn pawspot.main:app -
 ```powershell
 curl.exe -i http://127.0.0.1:8000/health
 curl.exe -i http://127.0.0.1:8000/ready
-uv run --locked --package pawspot-backend --extra dev pytest
-uv run --locked --package pawspot-backend --extra dev ruff check backend
-uv run --locked --package pawspot-backend --extra dev ruff format --check backend
-uv run --locked --package pawspot-backend --extra dev mypy
-uv run --locked --package pawspot-backend --extra dev pytest -m integration
+uv run --locked --all-packages --all-extras pytest
+uv run --locked --all-packages --all-extras ruff check backend bot
+uv run --locked --all-packages --all-extras ruff format --check backend bot
+uv run --locked --all-packages --all-extras mypy
+uv run --locked --all-packages --all-extras pytest -m integration
 uv lock --check
 ```
 
@@ -67,9 +67,9 @@ cp .env.example .env
 ${EDITOR:-vi} .env
 docker compose --env-file .env -f infra/compose.yaml up -d --wait
 docker compose --env-file .env -f infra/compose.yaml exec postgres psql -U pawspot -d pawspot -c 'SELECT PostGIS_Version();'
-uv sync --locked --package pawspot-backend --extra dev
-uv run --locked --package pawspot-backend --extra dev alembic -c backend/alembic.ini upgrade head
-uv run --locked --package pawspot-backend --extra dev uvicorn pawspot.main:app --host 127.0.0.1 --port 8000
+uv sync --locked --all-packages --all-extras
+uv run --locked --all-packages --all-extras alembic -c backend/alembic.ini upgrade head
+uv run --locked --all-packages --all-extras uvicorn pawspot.main:app --host 127.0.0.1 --port 8000
 ```
 
 В другом терминале:
@@ -77,11 +77,11 @@ uv run --locked --package pawspot-backend --extra dev uvicorn pawspot.main:app -
 ```sh
 curl -i http://127.0.0.1:8000/health
 curl -i http://127.0.0.1:8000/ready
-uv run --locked --package pawspot-backend --extra dev pytest
-uv run --locked --package pawspot-backend --extra dev ruff check backend
-uv run --locked --package pawspot-backend --extra dev ruff format --check backend
-uv run --locked --package pawspot-backend --extra dev mypy
-uv run --locked --package pawspot-backend --extra dev pytest -m integration
+uv run --locked --all-packages --all-extras pytest
+uv run --locked --all-packages --all-extras ruff check backend bot
+uv run --locked --all-packages --all-extras ruff format --check backend bot
+uv run --locked --all-packages --all-extras mypy
+uv run --locked --all-packages --all-extras pytest -m integration
 uv lock --check
 ```
 
@@ -102,10 +102,28 @@ docker compose --env-file .env -f infra/compose.yaml start postgres
 
 ## Сейчас реализовано
 
-`GET /health` проверяет живость FastAPI без обращения к БД. `GET /ready` выполняет `SELECT PostGIS_Version()` и возвращает версию PostGIS либо 503 при SQLAlchemy/DB ошибке. Тайм-аут подключения задаётся `PAWSPOT_DB_CONNECT_TIMEOUT_SECONDS` (по умолчанию 3). Alembic создаёт доменные таблицы, PostGIS extension и seed Тбилиси; повторный `upgrade head` безопасен. Для проверки отката на одноразовой БД: `uv run --locked --package pawspot-backend --extra dev alembic -c backend/alembic.ini downgrade base`, затем снова `upgrade head`. **Downgrade удаляет доменные таблицы и данные.**
+`GET /health` проверяет живость FastAPI без обращения к БД. `GET /ready` выполняет `SELECT PostGIS_Version()` и возвращает версию PostGIS либо 503 при SQLAlchemy/DB ошибке. Тайм-аут подключения задаётся `PAWSPOT_DB_CONNECT_TIMEOUT_SECONDS` (по умолчанию 3). Alembic создаёт доменные таблицы, PostGIS extension и seed Тбилиси; повторный `upgrade head` безопасен. Для проверки отката на одноразовой БД: `uv run --locked --all-packages --all-extras alembic -c backend/alembic.ini downgrade base`, затем снова `upgrade head`. **Downgrade удаляет доменные таблицы и данные.**
 
 Геоприватность использует фиксированную сетку; радиус задаётся `PAWSPOT_PUBLIC_LOCATION_RADIUS_M` (default 200 м), смена параметра после появления опубликованных встреч требует отдельной миграции и анализа приватности. Точные точки не входят в публичную схему `EncounterPublic`, в том числе для автора. Обычный `pytest` не запускает интеграционные тесты; после миграции выполните `pytest -m integration`. CI проверяет upgrade/downgrade, constraints и PostGIS на реальной БД.
 
 Закрытый пилот требует `PAWSPOT_ALLOWED_TELEGRAM_IDS`, `PAWSPOT_TELEGRAM_BOT_TOKEN` и отдельный `PAWSPOT_INTERNAL_SERVICE_TOKEN` в `.env`. Пустой allowlist не даёт доступ никому. Mini App передаёт raw `initData` в `POST /api/v1/auth/telegram`, backend проверяет HMAC и время, выдаёт случайную сессию (в БД только SHA-256 токена). Bot использует внутренний service token и Telegram `from.id`; клиентский заголовок actor принимается только после проверки service token. `PAWSPOT_CORS_ORIGINS` — список конкретных origins через запятую, по умолчанию пустой. Токены и raw initData не логируются приложением. In-process лимит на auth endpoint рассчитан на один небольшой процесс пилота, не на несколько независимых воркеров.
 
-Backend workflow добавления встречи доступен под `/api/v1/encounter-drafts` для Bearer-сессии и `/internal/v1/encounter-drafts` для бота с отдельным service token. `POST` создаёт или возвращает один активный draft, `PUT /{id}/photo` принимает multipart JPEG/PNG/WebP, `PATCH /{id}` сохраняет вид, локацию/skip и выбор животного, `POST /{id}/matches` ищет кандидатов, `POST /{id}/commit` атомарно создаёт Encounter. Первый commit возвращает 201, повтор — 200 с тем же UUID. `GET /encounters/{id}` и `GET /photos/{id}/{variant}` доступны только авторизованным участникам пилота. Точная локация отсутствует в этих ответах. Фото перекодируются в JPEG и хранятся вне публичной static-директории; исходники не сохраняются. Отменённые/просроченные черновики и старые осиротевшие фото очищаются командой `uv run --locked --package pawspot-backend --extra dev python -m pawspot.cli cleanup` (запускать по расписанию ОС). Радиус matching, период и число кандидатов заданы `PAWSPOT_MATCHING_*` в `.env.example`.
+## Telegram Bot — первый пользовательский сценарий
+
+Создайте бота через BotFather и запишите его token только в локальный `.env` как `PAWSPOT_TELEGRAM_BOT_TOKEN`. Укажите собственный числовой Telegram ID в `PAWSPOT_ALLOWED_TELEGRAM_IDS` и отдельную длинную случайную строку в `PAWSPOT_INTERNAL_SERVICE_TOKEN`. Эти же `.env` читает backend; запускайте его и примените миграции до запуска бота. `PAWSPOT_BOT_BACKEND_URL` указывает доступный боту адрес API; для локального запуска подходит `http://127.0.0.1:8000`. При размещении процессов на разных хостах используйте защищённый внутренний канал и TLS. Не публикуйте `/internal/v1` наружу через reverse proxy.
+
+В отдельной PowerShell-сессии из корня репозитория:
+
+```powershell
+uv run --locked --all-packages --all-extras python -m pawspot_bot.main
+```
+
+В отдельном POSIX-терминале:
+
+```sh
+uv run --locked --all-packages --all-extras python -m pawspot_bot.main
+```
+
+Откройте личный чат с ботом, отправьте `/start`, нажмите «📸 Добавить встречу» и отправьте фото. Бот предлагает вид, геолокацию или пропуск, кандидатов либо новое животное, затем необязательные имя и заметку. `/cancel` отменяет черновик; повтор `/start` продолжает его. Один polling-процесс должен работать с данным token. Реальный Telegram smoke test требует действительный token и участника в allowlist; в CI проверяются синтетические Telegram Update и backend/PostGIS без внешнего Telegram.
+
+Backend workflow добавления встречи доступен под `/api/v1/encounter-drafts` для Bearer-сессии и `/internal/v1/encounter-drafts` для бота с отдельным service token. `POST` создаёт или возвращает один активный draft, `PUT /{id}/photo` принимает multipart JPEG/PNG/WebP, `PATCH /{id}` сохраняет вид, локацию/skip и выбор животного, `POST /{id}/matches` ищет кандидатов, `POST /{id}/commit` атомарно создаёт Encounter. Первый commit возвращает 201, повтор — 200 с тем же UUID. `GET /encounters/{id}` и `GET /photos/{id}/{variant}` доступны только авторизованным участникам пилота. Точная локация отсутствует в этих ответах. Фото перекодируются в JPEG и хранятся вне публичной static-директории; исходники не сохраняются. Отменённые/просроченные черновики и старые осиротевшие фото очищаются командой `uv run --locked --all-packages --all-extras python -m pawspot.cli cleanup` (запускать по расписанию ОС). Радиус matching, период и число кандидатов заданы `PAWSPOT_MATCHING_*` в `.env.example`.

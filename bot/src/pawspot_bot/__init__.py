@@ -1,0 +1,1 @@
+"""Telegram adapter for PawSpot."""
