@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from pawspot.db import get_engine
 from pawspot.geo import point_wkt, public_location
-from pawspot.models import Animal, City, Encounter, Reaction, User
+from pawspot.models import Animal, City, Encounter, Photo, Reaction, User
 
 
 @pytest.mark.integration
@@ -40,6 +40,7 @@ def test_migration_schema_and_seed() -> None:
     assert {
         "alembic_version",
         "auth_sessions",
+        "encounter_drafts",
         "users",
         "cities",
         "photos",
@@ -56,7 +57,7 @@ def test_migration_schema_and_seed() -> None:
         )
         assert (
             connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261004_02"
+            == "20261004_03"
         )
         assert (
             connection.scalar(
@@ -101,11 +102,23 @@ def test_relationships_geo_and_constraints() -> None:
                 )
                 session.add(animal)
                 session.flush()
+                photo = Photo(
+                    uploaded_by_user_id=author.id,
+                    storage_key=f"{uuid4()}/main.jpg",
+                    thumbnail_key=f"{uuid4()}/thumbnail.jpg",
+                    actual_mime="image/jpeg",
+                    bytes=100,
+                    width=10,
+                    height=10,
+                )
+                session.add(photo)
+                session.flush()
                 point = public_location(41.7151, 44.8271, 200)
                 encounter = Encounter(
                     animal=animal,
                     user=author,
                     city=city,
+                    photo_id=photo.id,
                     observed_at=datetime.now(UTC),
                     private_location=func.ST_GeogFromText(point_wkt(41.7151, 44.8271)),
                     public_location=func.ST_GeogFromText(
@@ -141,6 +154,22 @@ def test_relationships_geo_and_constraints() -> None:
                 session.flush()
 
                 def rejects(statement: str, parameters: dict[str, object]) -> None:
+                    if ":photo_id" in statement:
+                        invalid_photo_id = uuid4()
+                        session.add(
+                            Photo(
+                                id=invalid_photo_id,
+                                uploaded_by_user_id=author.id,
+                                storage_key=f"{invalid_photo_id}/main.jpg",
+                                thumbnail_key=f"{invalid_photo_id}/thumbnail.jpg",
+                                actual_mime="image/jpeg",
+                                bytes=100,
+                                width=10,
+                                height=10,
+                            )
+                        )
+                        session.flush()
+                        parameters = {**parameters, "photo_id": invalid_photo_id}
                     with pytest.raises(IntegrityError), session.begin_nested():
                         session.execute(text(statement), parameters)
 
@@ -155,29 +184,39 @@ def test_relationships_geo_and_constraints() -> None:
                     {"id": uuid4(), "user_id": reader.id, "encounter_id": encounter.id},
                 )
                 rejects(
-                    "INSERT INTO encounters (id,animal_id,user_id,city_id,observed_at) "
-                    "VALUES (:id,:animal_id,:user_id,NULL,now())",
-                    {"id": uuid4(), "animal_id": animal.id, "user_id": author.id},
+                    "INSERT INTO encounters "
+                    "(id,animal_id,user_id,photo_id,city_id,observed_at) "
+                    "VALUES (:id,:animal_id,:user_id,:photo_id,NULL,now())",
+                    {
+                        "id": uuid4(),
+                        "animal_id": animal.id,
+                        "user_id": author.id,
+                        "photo_id": photo.id,
+                    },
                 )
                 rejects(
-                    "INSERT INTO encounters (id,animal_id,user_id,city_id,observed_at) "
-                    "VALUES (:id,:animal_id,:user_id,:city_id,now())",
+                    "INSERT INTO encounters "
+                    "(id,animal_id,user_id,photo_id,city_id,observed_at) "
+                    "VALUES (:id,:animal_id,:user_id,:photo_id,:city_id,now())",
                     {
                         "id": uuid4(),
                         "animal_id": uuid4(),
                         "user_id": author.id,
+                        "photo_id": photo.id,
                         "city_id": city.id,
                     },
                 )
                 rejects(
                     "INSERT INTO encounters "
-                    "(id,animal_id,user_id,city_id,observed_at,public_location) "
-                    "VALUES (:id,:animal_id,:user_id,:city_id,now(),"
+                    "(id,animal_id,user_id,photo_id,city_id,"
+                    "observed_at,public_location) "
+                    "VALUES (:id,:animal_id,:user_id,:photo_id,:city_id,now(),"
                     "ST_GeogFromText('SRID=4326;POINT(44.82 41.71)'))",
                     {
                         "id": uuid4(),
                         "animal_id": animal.id,
                         "user_id": author.id,
+                        "photo_id": photo.id,
                         "city_id": city.id,
                     },
                 )

@@ -25,6 +25,13 @@ class GeographyPoint(UserDefinedType[object]):
         return "geography(Point,4326)"
 
 
+class GeometryPoint(UserDefinedType[object]):
+    cache_ok = True
+
+    def get_col_spec(self, **kw: object) -> str:
+        return "geometry(Point,4326)"
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -189,8 +196,8 @@ class Encounter(TimestampMixin, Base):
     user_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
-    photo_id: Mapped[UUID | None] = mapped_column(
-        Uuid, ForeignKey("photos.id", ondelete="RESTRICT"), unique=True
+    photo_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("photos.id", ondelete="RESTRICT"), unique=True, nullable=False
     )
     city_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("cities.id", ondelete="RESTRICT"), nullable=False
@@ -208,6 +215,67 @@ class Encounter(TimestampMixin, Base):
     animal: Mapped[Animal] = relationship(back_populates="encounters")
     user: Mapped[User] = relationship(back_populates="encounters")
     city: Mapped[City] = relationship(back_populates="encounters")
+
+
+class EncounterDraft(TimestampMixin, Base):
+    __tablename__ = "encounter_drafts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'committed', 'cancelled')",
+            name="ck_encounter_drafts_status",
+        ),
+        CheckConstraint(
+            "species IS NULL OR species IN ('cat', 'dog')",
+            name="ck_encounter_drafts_species",
+        ),
+        CheckConstraint(
+            "selection IS NULL OR selection IN ('new', 'existing')",
+            name="ck_encounter_drafts_selection",
+        ),
+        CheckConstraint("version >= 0", name="ck_encounter_drafts_version"),
+        Index(
+            "uq_encounter_drafts_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="active"
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    photo_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("photos.id", ondelete="RESTRICT")
+    )
+    species: Mapped[str | None] = mapped_column(String(24))
+    location_set: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    private_location: Mapped[object | None] = mapped_column(GeographyPoint())
+    public_location: Mapped[object | None] = mapped_column(GeographyPoint())
+    public_cell_key: Mapped[str | None] = mapped_column(String(80))
+    geo_policy_version: Mapped[int | None] = mapped_column(Integer)
+    city_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("cities.id", ondelete="RESTRICT")
+    )
+    selection: Mapped[str | None] = mapped_column(String(16))
+    animal_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("animals.id", ondelete="RESTRICT")
+    )
+    new_name: Mapped[str | None] = mapped_column(String(80))
+    comment: Mapped[str | None] = mapped_column(String(500))
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    result_encounter_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("encounters.id", ondelete="RESTRICT"), unique=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class Reaction(Base):

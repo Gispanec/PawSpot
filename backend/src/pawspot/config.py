@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     auth_init_data_max_age_seconds: int = Field(default=300, ge=30, le=3600)
     auth_session_hours: int = Field(default=12, ge=1, le=168)
+    default_city_slug: str = "tbilisi"
+    matching_radius_m: int = Field(default=1000, ge=100, le=10000)
+    matching_lookback_days: int = Field(default=90, ge=1, le=365)
+    matching_max_candidates: int = Field(default=5, ge=1, le=20)
+    draft_ttl_hours: int = Field(default=24, ge=1, le=168)
+    media_dir: str = "media"
+    max_photo_bytes: int = Field(default=10 * 1024 * 1024, ge=1)
+    photo_cleanup_grace_hours: int = Field(default=48, ge=1, le=720)
 
     @property
     def allowlist(self) -> frozenset[int]:
