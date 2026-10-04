@@ -16,8 +16,11 @@ export async function bootstrapSession(): Promise<AppSession> {
     }
   }
   const telegram = telegramApp()
-  if (!telegram?.initData) {
+  if (!telegram) {
     throw new Error('Откройте PawSpot через Telegram. Локальный просмотр описан в README.')
+  }
+  if (!telegram.initData) {
+    throw new Error('Telegram не передал данные входа. Отправьте боту /start и откройте PawSpot через кнопку под его сообщением.')
   }
   telegram.ready()
   telegram.expand()

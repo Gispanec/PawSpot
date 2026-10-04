@@ -352,9 +352,22 @@ def test_telegram_photo_download_failure_keeps_draft() -> None:
 
 
 def test_mini_app_button_keeps_existing_add_flow() -> None:
-    harness = Harness(FakeBackend())
-    harness.flow.mini_app_url = "https://pawspot.example/app"
-    keyboard = harness.flow.menu().keyboard
-    assert keyboard[0][0].text == ADD
-    assert keyboard[1][0].web_app is not None
-    assert keyboard[1][0].web_app.url == "https://pawspot.example/app"
+    async def run() -> None:
+        harness = Harness(FakeBackend())
+        harness.flow.mini_app_url = "https://pawspot.example/app"
+        with patch.object(
+            harness.bot, "send_message", side_effect=harness.send_message
+        ):
+            await harness.feed(text="/start")
+            assert harness.markups[0].keyboard[0][0].text == ADD
+            assert harness.markups[0].keyboard[0][0].web_app is None
+            button = harness.markups[1].inline_keyboard[0][0]
+            assert button.text == "🐾 Открыть PawSpot"
+            assert button.web_app is not None
+            assert button.web_app.url == "https://pawspot.example/app"
+            assert button.callback_data is None
+            await harness.feed(text=ADD)
+            assert harness.backend.draft is not None
+            assert harness.backend.draft["state"] == "need_photo"
+
+    asyncio.run(run())

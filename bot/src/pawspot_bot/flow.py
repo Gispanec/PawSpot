@@ -64,17 +64,21 @@ class BotFlow:
         await self.bot.send_message(user_id, text, **kwargs)
 
     def menu(self) -> ReplyKeyboardMarkup:
-        rows = [[KeyboardButton(text=ADD)]]
-        if self.mini_app_url:
-            rows.append(
+        return ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text=ADD)]], resize_keyboard=True
+        )
+
+    def mini_app_button(self) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
                 [
-                    KeyboardButton(
+                    InlineKeyboardButton(
                         text="🐾 Открыть PawSpot",
                         web_app=WebAppInfo(url=self.mini_app_url),
                     )
                 ]
-            )
-        return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+            ]
+        )
 
     async def error(self, user_id: int, exc: BackendError) -> None:
         if exc.status_code == 403:
@@ -110,6 +114,12 @@ class BotFlow:
         else:
             await self.say(user_id, "Продолжим незавершённую встречу.")
             await self.render(user_id, name, draft)
+        if self.mini_app_url:
+            await self.say(
+                user_id,
+                "Профили животных и карта — в PawSpot.",
+                reply_markup=self.mini_app_button(),
+            )
 
     async def add(self, user_id: int, name: str) -> None:
         self.pending.pop(user_id, None)

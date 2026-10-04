@@ -32,6 +32,16 @@ describe('Mini App session', () => {
     await expect(bootstrapSession()).rejects.toThrow('Откройте PawSpot через Telegram')
   })
 
+  it('explains the unsupported keyboard-button launch without trusting unsigned user data', async () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal('fetch', fetcher)
+    vi.stubGlobal('window', { Telegram: { WebApp: {
+      initData: '', initDataUnsafe: { user: { id: 123 } }, ready: vi.fn(), expand: vi.fn(),
+    } } })
+    await expect(bootstrapSession()).rejects.toThrow('кнопку под его сообщением')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
   it('reports server authentication rejection', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 403 }))
     await expect(bootstrapSession()).rejects.toMatchObject({ status: 403 })
