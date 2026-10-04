@@ -59,11 +59,11 @@ def build_router(prefix: str, actor_dependency: Callable[..., User]) -> APIRoute
         draft = active_draft(session, actor, settings)
         if draft is None:
             raise HTTPException(status_code=404, detail="No active draft")
-        return draft_view(draft)
+        return draft_view(session, draft)
 
     @router.get("/encounter-drafts/{draft_id}", response_model=DraftView)
     def get_draft(draft_id: UUID, actor: Actor, session: Database) -> DraftView:
-        return draft_view(require_draft(session, actor, draft_id))
+        return draft_view(session, require_draft(session, actor, draft_id))
 
     @router.patch("/encounter-drafts/{draft_id}", response_model=DraftView)
     def patch_draft(
@@ -119,7 +119,7 @@ def build_router(prefix: str, actor_dependency: Callable[..., User]) -> APIRoute
             storage.delete(main_key)
             storage.delete(thumbnail_key)
             raise
-        return draft_view(draft)
+        return draft_view(session, draft)
 
     @router.post(
         "/encounter-drafts/{draft_id}/matches", response_model=list[CandidateView]

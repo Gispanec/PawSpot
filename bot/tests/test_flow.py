@@ -10,7 +10,8 @@ from aiogram import Bot
 from aiogram.types import File, Update
 
 from pawspot_bot.backend_client import BackendClient, BackendError
-from pawspot_bot.flow import ADD, BotFlow, choice, create_dispatcher
+from pawspot_bot.flow import ABOUT, ADD, BotFlow, choice, create_dispatcher
+from pawspot_bot.main import configure_menu_button
 
 
 class FakeBackend:
@@ -23,17 +24,20 @@ class FakeBackend:
         self.fail_upload: int | None = None
 
     async def current(self, user_id: int, name: str) -> dict[str, Any] | None:
-        return self.draft
+        return self.draft if self.draft and self.draft["state"] != "committed" else None
 
     async def create(self, user_id: int, name: str) -> dict[str, Any]:
-        if self.draft is None:
+        if self.draft is None or self.draft["state"] == "committed":
             self.draft = {
                 "public_id": str(uuid4()),
                 "version": 0,
                 "state": "need_photo",
+                "photo_public_id": None,
                 "species": None,
                 "location_present": False,
+                "city_name": "Tbilisi",
                 "selection": None,
+                "selected_animal_name": None,
                 "new_name": None,
                 "comment": None,
             }
@@ -46,6 +50,7 @@ class FakeBackend:
             raise BackendError(self.fail_upload)
         assert photo == b"photo"
         self.uploads += 1
+        draft["photo_public_id"] = str(uuid4())
         draft["state"] = "need_species"
         draft["version"] += 1
         self.events.append("photo")
@@ -66,6 +71,7 @@ class FakeBackend:
             draft["state"] = "ready"
         if "animal_public_id" in fields:
             draft["selection"] = "existing"
+            draft["selected_animal_name"] = "Гиви"
             draft["state"] = "ready"
         if "comment" in fields:
             draft["comment"] = fields["comment"]
@@ -83,6 +89,9 @@ class FakeBackend:
                     "animal_public_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                     "name": "Гиви",
                     "species": draft["species"],
+                    "thumbnail_photo_id": str(uuid4()),
+                    "last_observed_at": "2026-10-03T12:00:00+00:00",
+                    "encounter_count": 3,
                 }
             ]
         return []
@@ -99,7 +108,11 @@ class FakeBackend:
             draft["state"] = "committed"
         return {
             "species": draft["species"],
-            "animal_name": draft["new_name"],
+            "animal_name": (
+                draft["new_name"]
+                if draft["selection"] == "new"
+                else draft["selected_animal_name"]
+            ),
             "photo_public_id": str(uuid4()),
             "comment": draft["comment"],
         }
@@ -114,8 +127,10 @@ class FakeBackend:
     async def cancel(self, draft: dict[str, Any], user_id: int, name: str) -> None:
         self.draft = None
 
-    async def photo(self, photo_id: str, user_id: int, name: str) -> bytes:
-        return b"thumbnail"
+    async def photo(
+        self, photo_id: str, user_id: int, name: str, *, variant: str = "thumbnail"
+    ) -> bytes:
+        return variant.encode()
 
 
 class Harness:
@@ -136,6 +151,7 @@ class Harness:
     async def send_photo(self, chat_id: int, photo: Any, **kwargs: Any) -> None:
         self.sent_photos.append(photo.data)
         self.messages.append(kwargs["caption"])
+        self.markups.append(kwargs.get("reply_markup"))
 
     async def get_file(self, file_id: str) -> File:
         return File(file_id=file_id, file_unique_id="unique", file_path="/x")
@@ -216,9 +232,9 @@ async def scenario(backend: FakeBackend, actions: str) -> Harness:
         else:
             await harness.feed(location=True)
         if "existing" in actions:
-            await harness.feed(callback=harness.button("🐕 Гиви"))
+            await harness.feed(callback=harness.button("✅ Да, это он"))
         else:
-            await harness.feed(callback=harness.button("🆕 Новое животное"))
+            await harness.feed(callback=harness.button("🆕 Нет, это новое животное"))
             if "name" in actions:
                 await harness.feed(text="Бондо")
             else:
@@ -227,7 +243,7 @@ async def scenario(backend: FakeBackend, actions: str) -> Harness:
             await harness.feed(text="У пекарни")
         else:
             await harness.feed(callback=harness.button("Пропустить"))
-        save_button = harness.button("💾 Сохранить")
+        save_button = harness.button("✅ Сохранить")
         await harness.feed(callback=save_button)
         await harness.feed(callback=save_button)
     return harness
@@ -242,8 +258,11 @@ def test_telegram_happy_paths(actions: str, candidates: bool) -> None:
     harness = asyncio.run(scenario(backend, actions))
     assert backend.commits == 1
     assert backend.uploads == 1
-    assert harness.sent_photos == [b"thumbnail"]
+    assert harness.sent_photos[-1] == b"thumbnail"
+    assert b"main" in harness.sent_photos
     assert any("Встреча сохранена" in message for message in harness.messages)
+    assert harness.markups[-1].keyboard[0][0].text == ADD
+    assert harness.markups[-1].keyboard[1][0].text == ABOUT
     assert ("matches" in backend.events) == ("no_location" not in actions)
     assert ("collection" in backend.events) == ("no_location" in actions)
     assert backend.draft is not None
@@ -369,5 +388,227 @@ def test_mini_app_button_keeps_existing_add_flow() -> None:
             await harness.feed(text=ADD)
             assert harness.backend.draft is not None
             assert harness.backend.draft["state"] == "need_photo"
+
+    asyncio.run(run())
+
+
+def test_menu_button_is_configured_for_mini_app() -> None:
+    async def run() -> None:
+        bot = Bot("123456:TEST_TOKEN")
+        try:
+            with patch.object(
+                bot, "set_chat_menu_button", new_callable=AsyncMock
+            ) as setter:
+                await configure_menu_button(bot, "https://pawspot.example/app")
+                assert setter.await_args is not None
+                button = setter.await_args.kwargs["menu_button"]
+                assert button.text == "🐾 Открыть PawSpot"
+                assert button.web_app.url == "https://pawspot.example/app"
+                assert setter.await_args.kwargs.get("chat_id") is None
+                setter.reset_mock()
+                await configure_menu_button(bot, "")
+                assert setter.await_args is not None
+                assert setter.await_args.kwargs["menu_button"].type == "commands"
+        finally:
+            await bot.session.close()
+
+    asyncio.run(run())
+
+
+def test_about_and_help_keep_inline_mini_app_link() -> None:
+    async def run() -> None:
+        harness = Harness(FakeBackend())
+        harness.flow.mini_app_url = "https://pawspot.example/app"
+        with patch.object(
+            harness.bot, "send_message", side_effect=harness.send_message
+        ):
+            await harness.feed(text="/start")
+            assert harness.markups[0].keyboard[1][0].text == ABOUT
+            await harness.feed(text=ABOUT)
+            assert "Точные координаты встречи не публикуются" in harness.messages[-1]
+            assert harness.markups[-1].inline_keyboard[0][0].web_app.url == (
+                "https://pawspot.example/app"
+            )
+            await harness.feed(text="/help")
+            assert "ваша коллекция" in harness.messages[-1]
+
+    asyncio.run(run())
+
+
+def test_repeated_add_reuses_draft_without_repeated_prompts() -> None:
+    async def run() -> None:
+        backend = FakeBackend()
+        harness = Harness(backend)
+        with (
+            patch.object(harness.bot, "send_message", side_effect=harness.send_message),
+            patch.object(harness.bot, "get_file", side_effect=harness.get_file),
+            patch.object(
+                harness.bot, "download_file", side_effect=harness.download_file
+            ),
+        ):
+            await harness.feed(text=ADD)
+            draft = backend.draft
+            assert draft is not None
+            first_id = draft["public_id"]
+            await harness.feed(text=ADD)
+            await harness.feed(text=ADD)
+            await asyncio.gather(harness.feed(text=ADD), harness.feed(text=ADD))
+            assert (
+                sum("Отправьте фото животного" in text for text in harness.messages)
+                == 1
+            )
+            assert draft["public_id"] == first_id
+            await harness.feed(photo=True)
+            await harness.feed(text=ADD)
+            assert harness.messages.count("Кого встретили?") == 1
+            assert draft["public_id"] == first_id
+
+    asyncio.run(run())
+
+
+def test_candidates_show_photo_and_existing_animal_in_preview() -> None:
+    backend = FakeBackend(candidates=True)
+    harness = asyncio.run(scenario(backend, "existing"))
+    assert any("Возможно, его уже встречали" in text for text in harness.messages)
+    assert any("Последняя встреча: 03.10.2026" in text for text in harness.messages)
+    assert any("всего встреч: 3" in text for text in harness.messages)
+    assert any("Животное: уже встречали — Гиви" in text for text in harness.messages)
+    assert harness.sent_photos.count(b"main") == 2  # кандидат и итоговый preview
+    assert all("private_location" not in text for text in harness.messages)
+
+
+def test_candidate_can_be_rejected_as_new_animal() -> None:
+    backend = FakeBackend(candidates=True)
+    harness = asyncio.run(scenario(backend, "name"))
+    assert backend.draft is not None
+    assert backend.draft["selection"] == "new"
+    assert backend.draft["new_name"] == "Бондо"
+    assert any("Возможно, его уже встречали" in text for text in harness.messages)
+    assert any("Животное: новое — Бондо" in text for text in harness.messages)
+
+
+def test_candidate_without_photo_cannot_be_confirmed_as_match() -> None:
+    async def run() -> None:
+        backend = FakeBackend()
+        harness = Harness(backend)
+        draft = await backend.create(123, "Тест")
+        draft["species"] = "dog"
+        with patch.object(
+            harness.bot, "send_message", side_effect=harness.send_message
+        ):
+            await harness.flow.candidate(
+                123,
+                "Тест",
+                draft,
+                {
+                    "animal_public_id": str(uuid4()),
+                    "name": "Гиви",
+                    "species": "dog",
+                    "thumbnail_photo_id": None,
+                },
+            )
+        assert "нельзя проверить совпадение" in harness.messages[-1]
+        assert [row[0].text for row in harness.markups[-1].inline_keyboard] == [
+            "🆕 Нет, это новое животное"
+        ]
+
+    asyncio.run(run())
+
+
+def test_new_animal_name_and_note_can_be_kept_changed_or_cleared() -> None:
+    async def run() -> None:
+        backend = FakeBackend()
+        harness = Harness(backend)
+        with (
+            patch.object(harness.bot, "send_message", side_effect=harness.send_message),
+            patch.object(harness.bot, "send_photo", side_effect=harness.send_photo),
+            patch.object(harness.bot, "get_file", side_effect=harness.get_file),
+            patch.object(
+                harness.bot, "download_file", side_effect=harness.download_file
+            ),
+            patch.object(Bot, "__call__", new_callable=AsyncMock),
+        ):
+            await harness.feed(text=ADD)
+            await harness.feed(photo=True)
+            await harness.feed(callback=harness.button("🐕 Собака"))
+            await harness.feed(location=True)
+            assert harness.markups[-2].keyboard[0][0].text == ADD
+            await harness.feed(text=ADD)
+            assert (
+                sum("Совпадений не нашлось" in text for text in harness.messages) == 1
+            )
+            await harness.feed(callback=harness.button("🆕 Нет, это новое животное"))
+            await harness.feed(text=ADD)
+            assert harness.flow.pending[123] == "name_initial"
+            await harness.feed(text="Бондо")
+            await harness.feed(text="У пекарни")
+            draft = backend.draft
+            assert draft is not None
+            assert "Животное: новое — Бондо" in harness.messages[-1]
+            assert "Место: Tbilisi · приблизительное место" in harness.messages[-1]
+            assert "Заметка: У пекарни" in harness.messages[-1]
+            assert "41.71" not in harness.messages[-1]
+
+            await harness.feed(callback=harness.button("Имя"))
+            assert "Текущее имя: Бондо" in harness.messages[-1]
+            await harness.feed(callback=harness.button("Оставить имя"))
+            assert draft["new_name"] == "Бондо"
+            await harness.feed(callback=harness.button("Имя"))
+            await harness.feed(callback=harness.button("Изменить имя"))
+            await harness.feed(text="Гиви")
+            assert draft["new_name"] == "Гиви"
+            assert draft["comment"] == "У пекарни"
+            assert "Животное: новое — Гиви" in harness.messages[-1]
+
+            await harness.feed(callback=harness.button("Заметка"))
+            assert "Текущая заметка: У пекарни" in harness.messages[-1]
+            await harness.feed(callback=harness.button("Оставить заметку"))
+            assert draft["comment"] == "У пекарни"
+            await harness.feed(callback=harness.button("Заметка"))
+            await harness.feed(callback=harness.button("Изменить заметку"))
+            await harness.feed(text="На лавочке")
+            assert draft["comment"] == "На лавочке"
+            await harness.feed(callback=harness.button("Заметка"))
+            await harness.feed(callback=harness.button("Удалить заметку"))
+            assert draft["comment"] is None
+            assert "Заметка: нет" in harness.messages[-1]
+
+            save = harness.button("✅ Сохранить")
+            await harness.feed(callback=save)
+            assert backend.commits == 1
+            assert await backend.current(123, "Тест") is None
+            await harness.feed(text=ADD)
+            assert backend.draft is not None
+            assert backend.draft["state"] == "need_photo"
+
+    asyncio.run(run())
+
+
+def test_draft_values_survive_new_bot_flow_instance() -> None:
+    async def run() -> None:
+        backend = FakeBackend()
+        first = Harness(backend)
+        with (
+            patch.object(first.bot, "send_message", side_effect=first.send_message),
+            patch.object(first.bot, "send_photo", side_effect=first.send_photo),
+            patch.object(first.bot, "get_file", side_effect=first.get_file),
+            patch.object(first.bot, "download_file", side_effect=first.download_file),
+            patch.object(Bot, "__call__", new_callable=AsyncMock),
+        ):
+            await first.feed(text=ADD)
+            await first.feed(photo=True)
+            await first.feed(callback=first.button("🐕 Собака"))
+            await first.feed(location=True)
+            await first.feed(callback=first.button("🆕 Нет, это новое животное"))
+            await first.feed(text="Бондо")
+            await first.feed(text="У пекарни")
+        second = Harness(backend)
+        with (
+            patch.object(second.bot, "send_message", side_effect=second.send_message),
+            patch.object(second.bot, "send_photo", side_effect=second.send_photo),
+        ):
+            await second.feed(text="/start")
+            assert "Животное: новое — Бондо" in second.messages[-1]
+            assert "Заметка: У пекарни" in second.messages[-1]
 
     asyncio.run(run())

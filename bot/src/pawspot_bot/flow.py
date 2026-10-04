@@ -1,5 +1,7 @@
+import asyncio
 import io
 import logging
+from datetime import datetime
 from typing import Any
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -13,7 +15,6 @@ from aiogram.types import (
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
     WebAppInfo,
 )
 
@@ -21,6 +22,7 @@ from pawspot_bot.backend_client import BackendClient, BackendError
 
 logger = logging.getLogger(__name__)
 ADD = "📸 Добавить встречу"
+ABOUT = "ℹ️ О PawSpot"
 SKIP = "Пропустить"
 
 
@@ -59,13 +61,16 @@ class BotFlow:
         # Только состояние текстового поля UI. Доменный draft хранится в backend.
         self.pending: dict[int, str] = {}
         self.delivered: dict[int, str] = {}
+        self.last_prompt: dict[int, tuple[str, int, str]] = {}
+        self.add_locks: dict[int, asyncio.Lock] = {}
 
     async def say(self, user_id: int, text: str, **kwargs: Any) -> None:
         await self.bot.send_message(user_id, text, **kwargs)
 
     def menu(self) -> ReplyKeyboardMarkup:
         return ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=ADD)]], resize_keyboard=True
+            keyboard=[[KeyboardButton(text=ADD)], [KeyboardButton(text=ABOUT)]],
+            resize_keyboard=True,
         )
 
     def mini_app_button(self) -> InlineKeyboardMarkup:
@@ -104,15 +109,20 @@ class BotFlow:
 
     async def start(self, user_id: int, name: str) -> None:
         self.pending.pop(user_id, None)
+        self.last_prompt.pop(user_id, None)
         draft = await self.backend.current(user_id, name)
         if draft is None:
             await self.say(
                 user_id,
-                "Привет! Сохраним встречу с котом или собакой?",
+                "Привет! Это PawSpot — здесь можно сохранить встречу с "
+                "городским котом или собакой. Нажмите «Добавить встречу» "
+                "и отправьте фото. История, карта и коллекция — в Mini App.",
                 reply_markup=self.menu(),
             )
         else:
-            await self.say(user_id, "Продолжим незавершённую встречу.")
+            await self.say(
+                user_id, "Продолжим незавершённую встречу.", reply_markup=self.menu()
+            )
             await self.render(user_id, name, draft)
         if self.mini_app_url:
             await self.say(
@@ -121,12 +131,35 @@ class BotFlow:
                 reply_markup=self.mini_app_button(),
             )
 
+    async def about(self, user_id: int) -> None:
+        text = (
+            "PawSpot сохраняет встречи с городскими котами и собаками. "
+            "Сфотографируйте животное и добавьте встречу — с местом или без него.\n\n"
+            "Одного персонажа можно встречать много раз: его фотографии и история "
+            "сохраняются вместе. В Mini App доступны карта и ваша коллекция.\n\n"
+            "На карте видно только приблизительное место. "
+            "Точные координаты встречи не публикуются."
+        )
+        await self.say(
+            user_id,
+            text,
+            reply_markup=self.mini_app_button() if self.mini_app_url else self.menu(),
+        )
+
     async def add(self, user_id: int, name: str) -> None:
-        self.pending.pop(user_id, None)
-        await self.render(user_id, name, await self.backend.create(user_id, name))
+        async with self.add_locks.setdefault(user_id, asyncio.Lock()):
+            draft = await self.backend.create(user_id, name)
+            if draft["state"] == "ready" and user_id in self.pending:
+                return
+            await self.render(user_id, name, draft)
+
+    def prompt_key(self, draft: dict[str, Any], step: str) -> tuple[str, int, str]:
+        return str(draft["public_id"]), int(draft["version"]), step
 
     async def render(self, user_id: int, name: str, draft: dict[str, Any]) -> None:
         state = draft["state"]
+        if self.last_prompt.get(user_id) == self.prompt_key(draft, state):
+            return
         cancel = ("Отменить", choice("cancel", draft))
         if state == "need_photo":
             await self.say(user_id, "Отправьте фото животного. /cancel — отмена.")
@@ -163,57 +196,123 @@ class BotFlow:
                 if draft["location_present"]
                 else await self.backend.collection(user_id, name)
             )
-            rows = [
-                (
-                    f"{'🐕' if item['species'] == 'dog' else '🐈'} "
-                    f"{item['name'] or 'Без имени'}",
-                    choice(
-                        "animal",
-                        draft,
-                        str(
-                            item.get("animal_public_id", item.get("public_id"))
-                        ).replace("-", ""),
-                    ),
-                )
-                for item in candidates[:5]
-            ]
-            rows.extend([("🆕 Новое животное", choice("animal", draft, "new")), cancel])
             heading = (
-                "Возможно, его уже встречали:"
+                "Возможно, его уже встречали. Сравните фотографии:"
                 if draft["location_present"]
-                else "Можно выбрать животное из своей коллекции:"
+                else "Сравните фото с животными из вашей коллекции:"
             )
             if not candidates:
                 heading = "Совпадений не нашлось. Можно создать новое животное."
-            await self.say(
-                user_id,
-                heading,
-                reply_markup=buttons(*rows),
-            )
+                await self.say(
+                    user_id,
+                    heading,
+                    reply_markup=buttons(
+                        ("🆕 Нет, это новое животное", choice("animal", draft, "new")),
+                        cancel,
+                    ),
+                )
+            else:
+                await self.say(user_id, heading)
+                for item in candidates[:5]:
+                    await self.candidate(user_id, name, draft, item)
         elif state == "ready":
-            await self.confirm(user_id, draft)
+            await self.confirm(user_id, name, draft)
+            return
+        self.last_prompt[user_id] = self.prompt_key(draft, state)
 
-    async def confirm(self, user_id: int, draft: dict[str, Any]) -> None:
-        self.pending.pop(user_id, None)
-        kind = "собаку" if draft["species"] == "dog" else "кота"
-        animal = (
-            draft["new_name"] or "без имени"
-            if draft["selection"] == "new"
-            else "знакомое животное"
+    async def candidate(
+        self, user_id: int, name: str, draft: dict[str, Any], item: dict[str, Any]
+    ) -> None:
+        species = "собака" if item["species"] == "dog" else "кот"
+        title = item["name"] or "Без имени"
+        caption = f"{'🐕' if item['species'] == 'dog' else '🐈'} {title} · {species}"
+        if item.get("last_observed_at"):
+            last_seen = datetime.fromisoformat(item["last_observed_at"])
+            caption += f"\nПоследняя встреча: {last_seen:%d.%m.%Y}"
+        if item.get("encounter_count"):
+            caption += f" · всего встреч: {item['encounter_count']}"
+        if not item.get("last_observed_at") and not item.get("encounter_count"):
+            caption += "\nИз вашей коллекции"
+        animal_id = str(item.get("animal_public_id", item.get("public_id"))).replace(
+            "-", ""
         )
-        location = (
-            "с приблизительным местом" if draft["location_present"] else "без места"
+        markup = buttons(
+            ("✅ Да, это он", choice("animal", draft, animal_id)),
+            ("🆕 Нет, это новое животное", choice("animal", draft, "new")),
         )
+        photo_id = item.get("thumbnail_photo_id")
+        if photo_id:
+            try:
+                photo = await self.backend.photo(
+                    str(photo_id), user_id, name, variant="main"
+                )
+                await self.bot.send_photo(
+                    user_id,
+                    BufferedInputFile(photo, filename="candidate.jpg"),
+                    caption=caption,
+                    reply_markup=markup,
+                )
+                return
+            except (BackendError, TelegramAPIError) as exc:
+                logger.warning("Candidate photo unavailable: %s", type(exc).__name__)
         await self.say(
             user_id,
-            f"Сохранить встречу: {kind}, {animal}, {location}?",
+            f"{caption}\nФото недоступно — нельзя проверить совпадение.",
             reply_markup=buttons(
-                ("💾 Сохранить", choice("save", draft)),
-                ("Имя", choice("name", draft)),
-                ("Заметка", choice("comment", draft)),
-                ("Отменить", choice("cancel", draft)),
+                ("🆕 Нет, это новое животное", choice("animal", draft, "new"))
             ),
         )
+
+    async def confirm(self, user_id: int, name: str, draft: dict[str, Any]) -> None:
+        self.pending.pop(user_id, None)
+        key = self.prompt_key(draft, "ready")
+        if self.last_prompt.get(user_id) == key:
+            return
+        kind = "собака" if draft["species"] == "dog" else "кот"
+        animal = draft["new_name"] or "без имени"
+        if draft["selection"] == "existing":
+            animal = draft.get("selected_animal_name") or "без имени"
+        selection = "новое" if draft["selection"] == "new" else "уже встречали"
+        location = (
+            f"{draft.get('city_name') or 'город'} · приблизительное место"
+            if draft["location_present"]
+            else "не указано"
+        )
+        caption = (
+            "Проверьте встречу перед сохранением:\n"
+            f"Животное: {selection} — {animal}\n"
+            f"Вид: {kind}\n"
+            f"Место: {location}\n"
+            f"Заметка: {draft['comment'] or 'нет'}"
+        )
+        rows = [("✅ Сохранить", choice("save", draft))]
+        if draft["selection"] == "new":
+            rows.append(("Имя", choice("name", draft)))
+        rows.extend(
+            [
+                ("Заметка", choice("comment", draft)),
+                ("Отменить", choice("cancel", draft)),
+            ]
+        )
+        markup = buttons(*rows)
+        photo_id = draft.get("photo_public_id")
+        if photo_id:
+            try:
+                photo = await self.backend.photo(
+                    str(photo_id), user_id, name, variant="main"
+                )
+                await self.bot.send_photo(
+                    user_id,
+                    BufferedInputFile(photo, filename="preview.jpg"),
+                    caption=caption,
+                    reply_markup=markup,
+                )
+            except (BackendError, TelegramAPIError) as exc:
+                logger.warning("Preview photo unavailable: %s", type(exc).__name__)
+                await self.say(user_id, caption, reply_markup=markup)
+        else:
+            await self.say(user_id, caption, reply_markup=markup)
+        self.last_prompt[user_id] = key
 
     async def photo(self, message: Message, user_id: int, name: str) -> None:
         draft = await self.backend.create(user_id, name)
@@ -259,7 +358,11 @@ class BotFlow:
             else None
         )
         draft = await self.backend.patch(draft, user_id, name, location=position)
-        await self.say(user_id, "Место принято.", reply_markup=ReplyKeyboardRemove())
+        await self.say(
+            user_id,
+            "Место принято." if position else "Место пропущено.",
+            reply_markup=self.menu(),
+        )
         await self.render(user_id, name, draft)
 
     async def text(self, user_id: int, name: str, value: str) -> None:
@@ -271,9 +374,9 @@ class BotFlow:
         if draft["state"] == "need_location_or_skip" and value == SKIP:
             await self.location(user_id, name, None, None)
             return
-        if draft["state"] == "ready" and field == "name":
+        if draft["state"] == "ready" and field in {"name_initial", "name_edit"}:
             if draft["selection"] != "new":
-                await self.confirm(user_id, draft)
+                await self.confirm(user_id, name, draft)
                 return
             if len(value) > 80:
                 await self.say(user_id, "Имя слишком длинное. До 80 символов.")
@@ -282,37 +385,68 @@ class BotFlow:
                 draft, user_id, name, new_animal={"name": value}
             )
             self.pending.pop(user_id, None)
-            await self.ask_comment(user_id, draft)
+            if field == "name_initial":
+                await self.ask_comment(user_id, draft)
+            else:
+                await self.confirm(user_id, name, draft)
         elif draft["state"] == "ready" and field == "comment":
             if len(value) > 500:
                 await self.say(user_id, "Заметка слишком длинная. До 500 символов.")
                 return
             draft = await self.backend.patch(draft, user_id, name, comment=value)
-            await self.confirm(user_id, draft)
+            await self.confirm(user_id, name, draft)
         else:
             await self.render(user_id, name, draft)
 
-    async def ask_name(self, user_id: int, draft: dict[str, Any]) -> None:
-        self.pending[user_id] = "name"
-        await self.say(
-            user_id,
-            "Как его назовём? Напишите имя или пропустите.",
-            reply_markup=buttons(
-                ("Пропустить", choice("skipname", draft)),
-                ("💾 Сохранить без деталей", choice("save", draft)),
-            ),
-        )
+    async def ask_name(
+        self, user_id: int, draft: dict[str, Any], *, from_preview: bool = False
+    ) -> None:
+        if draft.get("new_name"):
+            self.pending.pop(user_id, None)
+            await self.say(
+                user_id,
+                f"Текущее имя: {draft['new_name']}",
+                reply_markup=buttons(
+                    ("Оставить имя", choice("keepname", draft)),
+                    ("Изменить имя", choice("editname", draft)),
+                ),
+            )
+        else:
+            self.pending[user_id] = "name_edit" if from_preview else "name_initial"
+            await self.say(
+                user_id,
+                "Как его назовём? Напишите имя или пропустите.",
+                reply_markup=buttons(
+                    (
+                        "Пропустить",
+                        choice("keepname" if from_preview else "skipname", draft),
+                    ),
+                ),
+            )
+        self.last_prompt[user_id] = self.prompt_key(draft, "name")
 
     async def ask_comment(self, user_id: int, draft: dict[str, Any]) -> None:
-        self.pending[user_id] = "comment"
-        await self.say(
-            user_id,
-            "Что он сегодня делал? Короткая заметка необязательна.",
-            reply_markup=buttons(
-                ("Пропустить", choice("skipcomment", draft)),
-                ("💾 Сохранить без заметки", choice("save", draft)),
-            ),
-        )
+        if draft.get("comment"):
+            self.pending.pop(user_id, None)
+            await self.say(
+                user_id,
+                f"Текущая заметка: {draft['comment']}",
+                reply_markup=buttons(
+                    ("Оставить заметку", choice("keepcomment", draft)),
+                    ("Изменить заметку", choice("editcomment", draft)),
+                    ("Удалить заметку", choice("clearcomment", draft)),
+                ),
+            )
+        else:
+            self.pending[user_id] = "comment"
+            await self.say(
+                user_id,
+                "Что он сегодня делал? Короткая заметка необязательна.",
+                reply_markup=buttons(
+                    ("Пропустить", choice("skipcomment", draft)),
+                ),
+            )
+        self.last_prompt[user_id] = self.prompt_key(draft, "comment")
 
     async def callback(self, callback: CallbackQuery, user_id: int, name: str) -> None:
         data = callback.data or ""
@@ -322,6 +456,11 @@ class BotFlow:
             "animal",
             "skipname",
             "skipcomment",
+            "keepname",
+            "editname",
+            "keepcomment",
+            "editcomment",
+            "clearcomment",
             "name",
             "comment",
             "save",
@@ -338,6 +477,7 @@ class BotFlow:
                 draft_marker, int(version_text), user_id, name
             )
             self.pending.pop(user_id, None)
+            self.last_prompt.pop(user_id, None)
             await self.result(user_id, name, result)
             self.delivered[user_id] = draft_marker
             return
@@ -348,6 +488,7 @@ class BotFlow:
         if action == "cancel":
             await self.backend.cancel(draft, user_id, name)
             self.pending.pop(user_id, None)
+            self.last_prompt.pop(user_id, None)
             await self.say(user_id, "Встреча отменена. Можно начать заново.")
             return
         if not version_text.isdigit() or int(version_text) != draft["version"]:
@@ -373,13 +514,28 @@ class BotFlow:
         elif draft["state"] == "ready" and action == "skipname":
             await self.ask_comment(user_id, draft)
         elif draft["state"] == "ready" and action == "skipcomment":
-            await self.confirm(user_id, draft)
+            await self.confirm(user_id, name, draft)
+        elif draft["state"] == "ready" and action in {"keepname", "keepcomment"}:
+            await self.confirm(user_id, name, draft)
+        elif (
+            draft["state"] == "ready"
+            and action == "editname"
+            and draft["selection"] == "new"
+        ):
+            self.pending[user_id] = "name_edit"
+            await self.say(user_id, "Напишите новое имя животного.")
+        elif draft["state"] == "ready" and action == "editcomment":
+            self.pending[user_id] = "comment"
+            await self.say(user_id, "Напишите новую заметку.")
+        elif draft["state"] == "ready" and action == "clearcomment":
+            draft = await self.backend.patch(draft, user_id, name, comment=None)
+            await self.confirm(user_id, name, draft)
         elif (
             draft["state"] == "ready"
             and action == "name"
             and draft["selection"] == "new"
         ):
-            await self.ask_name(user_id, draft)
+            await self.ask_name(user_id, draft, from_preview=True)
         elif draft["state"] == "ready" and action == "comment":
             await self.ask_comment(user_id, draft)
         else:
@@ -397,15 +553,11 @@ class BotFlow:
                 user_id,
                 BufferedInputFile(photo, filename="pawspot.jpg"),
                 caption=caption,
+                reply_markup=self.menu(),
             )
         except (BackendError, TelegramAPIError) as exc:
             logger.warning("Result photo unavailable: %s", type(exc).__name__)
-            await self.say(user_id, caption)
-        await self.say(
-            user_id,
-            "Чтобы добавить ещё одну встречу, нажмите кнопку ниже.",
-            reply_markup=self.menu(),
-        )
+            await self.say(user_id, caption, reply_markup=self.menu())
 
 
 def create_dispatcher(flow: BotFlow) -> Dispatcher:
@@ -420,6 +572,12 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
         except BackendError as exc:
             await flow.error(message.from_user.id, exc)
 
+    @router.message(Command("about", "help"), F.chat.type == "private")
+    @router.message(F.text == ABOUT, F.chat.type == "private")
+    async def about(message: Message) -> None:
+        if message.from_user is not None:
+            await flow.about(message.from_user.id)
+
     @router.message(Command("cancel"), F.chat.type == "private")
     async def cancel(message: Message) -> None:
         if message.from_user is None:
@@ -430,6 +588,7 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
             if draft:
                 await flow.backend.cancel(draft, user_id, name)
             flow.pending.pop(user_id, None)
+            flow.last_prompt.pop(user_id, None)
             await flow.say(user_id, "Встреча отменена. Можно начать заново.")
         except BackendError as exc:
             await flow.error(user_id, exc)

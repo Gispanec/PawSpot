@@ -2,10 +2,22 @@ import asyncio
 import logging
 
 from aiogram import Bot
+from aiogram.types import MenuButtonCommands, MenuButtonWebApp, WebAppInfo
 
 from pawspot_bot.backend_client import BackendClient
 from pawspot_bot.config import BotSettings
 from pawspot_bot.flow import BotFlow, create_dispatcher
+
+
+async def configure_menu_button(bot: Bot, mini_app_url: str) -> None:
+    if mini_app_url:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="🐾 Открыть PawSpot", web_app=WebAppInfo(url=mini_app_url)
+            )
+        )
+    else:
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 
 async def run() -> None:
@@ -16,6 +28,7 @@ async def run() -> None:
         settings.bot_backend_url, settings.internal_service_token.get_secret_value()
     )
     try:
+        await configure_menu_button(bot, settings.mini_app_url)
         dispatcher = create_dispatcher(
             BotFlow(bot, backend, settings.max_photo_bytes, settings.mini_app_url)
         )

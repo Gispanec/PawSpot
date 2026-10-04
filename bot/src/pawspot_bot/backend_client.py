@@ -147,10 +147,12 @@ class BackendClient:
             name,
         )
 
-    async def photo(self, photo_id: str, user_id: int, name: str) -> bytes:
+    async def photo(
+        self, photo_id: str, user_id: int, name: str, *, variant: str = "thumbnail"
+    ) -> bytes:
         return cast(
             bytes,
             await self.request(
-                "GET", f"/internal/v1/photos/{photo_id}/thumbnail", user_id, name
+                "GET", f"/internal/v1/photos/{photo_id}/{variant}", user_id, name
             ),
         )

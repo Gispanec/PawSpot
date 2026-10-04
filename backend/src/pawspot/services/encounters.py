@@ -40,19 +40,24 @@ def draft_state(draft: EncounterDraft) -> str:
     return "ready"
 
 
-def draft_view(draft: EncounterDraft) -> DraftView:
+def draft_view(session: Session, draft: EncounterDraft) -> DraftView:
+    animal = session.get(Animal, draft.animal_id) if draft.animal_id else None
+    city = session.get(City, draft.city_id) if draft.city_id else None
     return DraftView(
         public_id=draft.id,
         version=draft.version,
         state=draft_state(draft),
         photo_uploaded=draft.photo_id is not None,
+        photo_public_id=draft.photo_id,
         species=draft.species,
         location_present=draft.public_location is not None,
         city_public_id=draft.city_id,
         selection=draft.selection,
         animal_public_id=draft.animal_id,
+        selected_animal_name=animal.name if animal else None,
         new_name=draft.new_name,
         comment=draft.comment,
+        city_name=city.name if city else None,
         expires_at=draft.expires_at,
     )
 
@@ -86,7 +91,7 @@ def active_draft(
 def get_or_create_draft(session: Session, actor: User, settings: Settings) -> DraftView:
     draft = active_draft(session, actor, settings)
     if draft is not None:
-        return draft_view(draft)
+        return draft_view(session, draft)
     city = get_default_city(session, settings)
     draft = EncounterDraft(
         user_id=actor.id,
@@ -104,8 +109,8 @@ def get_or_create_draft(session: Session, actor: User, settings: Settings) -> Dr
         concurrent = active_draft(session, actor, settings)
         if concurrent is None:
             raise
-        return draft_view(concurrent)
-    return draft_view(draft)
+        return draft_view(session, concurrent)
+    return draft_view(session, draft)
 
 
 def require_draft(
@@ -221,7 +226,7 @@ def update_draft(
         draft.observed_at = patch.observed_at
     draft.version += 1
     session.commit()
-    return draft_view(draft)
+    return draft_view(session, draft)
 
 
 def find_candidates(
@@ -262,14 +267,34 @@ def find_candidates(
         if animal.id not in best or score < best[animal.id][0]:
             best[animal.id] = (score, animal)
     ranked = sorted(best.values(), key=lambda item: (item[0], str(item[1].id)))
+    top = [animal for _, animal in ranked[: settings.matching_max_candidates]]
+    if not top:
+        return []
+    stats = {
+        animal_id: (last_seen, count)
+        for animal_id, last_seen, count in session.execute(
+            select(
+                Encounter.animal_id,
+                func.max(Encounter.observed_at),
+                func.count(Encounter.id),
+            )
+            .where(
+                Encounter.animal_id.in_([animal.id for animal in top]),
+                Encounter.deleted_at.is_(None),
+            )
+            .group_by(Encounter.animal_id)
+        )
+    }
     return [
         CandidateView(
             animal_public_id=animal.id,
             name=animal.name,
             species=animal.species,
             thumbnail_photo_id=animal.primary_photo_id,
+            last_observed_at=stats[animal.id][0],
+            encounter_count=stats[animal.id][1],
         )
-        for _, animal in ranked[: settings.matching_max_candidates]
+        for animal in top
     ]
 
 
@@ -381,6 +406,11 @@ def own_collection(session: Session, actor: User) -> list[CollectionAnimal]:
         .limit(50)
     ).all()
     return [
-        CollectionAnimal(public_id=a.id, name=a.name, species=a.species)
+        CollectionAnimal(
+            public_id=a.id,
+            name=a.name,
+            species=a.species,
+            thumbnail_photo_id=a.primary_photo_id,
+        )
         for a in animals
     ]

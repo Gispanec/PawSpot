@@ -30,13 +30,16 @@ class DraftView(BaseModel):
     version: int
     state: str
     photo_uploaded: bool
+    photo_public_id: UUID | None
     species: str | None
     location_present: bool
     city_public_id: UUID | None
     selection: str | None
     animal_public_id: UUID | None
+    selected_animal_name: str | None
     new_name: str | None
     comment: str | None
+    city_name: str | None
     expires_at: datetime
 
 
@@ -45,6 +48,8 @@ class CandidateView(BaseModel):
     name: str | None
     species: str
     thumbnail_photo_id: UUID | None
+    last_observed_at: datetime
+    encounter_count: int
 
 
 class EncounterView(BaseModel):
@@ -69,3 +74,4 @@ class CollectionAnimal(BaseModel):
     public_id: UUID
     name: str | None
     species: str
+    thumbnail_photo_id: UUID | None

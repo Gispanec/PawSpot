@@ -88,6 +88,9 @@ def test_new_existing_no_geo_matching_and_privacy(tmp_path: Path) -> None:
             )
             assert bad_photo.status_code == 415
             draft = upload(client, actor_headers, draft)
+            assert draft["photo_public_id"] is not None
+            assert draft["city_name"] == "Tbilisi"
+            assert "private_location" not in draft
             draft = patch(client, actor_headers, draft, species="dog")
             draft = patch(
                 client,
@@ -103,6 +106,20 @@ def test_new_existing_no_geo_matching_and_privacy(tmp_path: Path) -> None:
             assert matches.json() == []
             draft = patch(client, actor_headers, draft, new_animal={"name": "Givi"})
             assert draft["state"] == "ready"
+            assert draft["new_name"] == "Givi"
+            assert draft["selected_animal_name"] is None
+            draft = patch(client, actor_headers, draft, comment="У пекарни")
+            resumed = client.get(
+                "/internal/v1/encounter-drafts/current", headers=actor_headers
+            )
+            assert resumed.status_code == 200
+            assert resumed.json()["new_name"] == "Givi"
+            assert resumed.json()["comment"] == "У пекарни"
+            assert resumed.json()["photo_public_id"] == draft["photo_public_id"]
+            assert "private_location" not in resumed.text
+            draft = patch(client, actor_headers, draft, comment=None)
+            assert draft["new_name"] == "Givi"
+            assert draft["comment"] is None
             result = client.post(
                 f"/internal/v1/encounter-drafts/{draft['public_id']}/commit",
                 headers=actor_headers,
@@ -154,6 +171,8 @@ def test_new_existing_no_geo_matching_and_privacy(tmp_path: Path) -> None:
                 second,
                 animal_public_id=first["animal_public_id"],
             )
+            assert second["selected_animal_name"] == "Givi"
+            assert second["photo_public_id"] is not None
             result = client.post(
                 f"/internal/v1/encounter-drafts/{second['public_id']}/commit",
                 headers=actor_headers,
@@ -181,7 +200,17 @@ def test_new_existing_no_geo_matching_and_privacy(tmp_path: Path) -> None:
             assert [item["animal_public_id"] for item in matches.json()] == [
                 first["animal_public_id"]
             ]
+            assert matches.json()[0]["thumbnail_photo_id"] == first["photo_public_id"]
+            assert matches.json()[0]["encounter_count"] == 2
+            assert matches.json()[0]["last_observed_at"]
+            assert "private_location" not in matches.text
+            assert "approximate_latitude" not in matches.text
             assert all("distance" not in item for item in matches.json())
+            candidate_photo = client.get(
+                f"/internal/v1/photos/{matches.json()[0]['thumbnail_photo_id']}/main",
+                headers=actor_headers,
+            )
+            assert candidate_photo.status_code == 200
             third = patch(
                 client,
                 actor_headers,
@@ -207,6 +236,9 @@ def test_new_existing_no_geo_matching_and_privacy(tmp_path: Path) -> None:
             )
             assert collection.status_code == 200
             assert len(collection.json()) == 1
+            assert (
+                collection.json()[0]["thumbnail_photo_id"] == first["photo_public_id"]
+            )
             with get_engine().connect() as connection:
                 assert connection.scalar(text("SELECT count(*) FROM animals")) == 1
                 assert connection.scalar(text("SELECT count(*) FROM encounters")) == 3
