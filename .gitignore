@@ -25,6 +25,7 @@ frontend/dist/
 # Local data
 media/
 backups/
+.local/
 
 # Editors and operating systems
 .idea/

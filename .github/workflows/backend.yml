@@ -5,6 +5,13 @@ on:
   pull_request:
 
 jobs:
+  launcher:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate Windows launcher without starting services
+        shell: powershell
+        run: ./scripts/test-launcher.ps1
   frontend:
     runs-on: ubuntu-latest
     defaults:
