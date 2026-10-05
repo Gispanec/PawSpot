@@ -11,7 +11,15 @@ from aiogram import Bot
 from aiogram.types import File, Update
 
 from pawspot_bot.backend_client import BackendClient, BackendError
-from pawspot_bot.flow import ABOUT, ADD, TODAY, BotFlow, choice, create_dispatcher
+from pawspot_bot.flow import (
+    ABOUT,
+    ADD,
+    CANCEL,
+    TODAY,
+    BotFlow,
+    choice,
+    create_dispatcher,
+)
 from pawspot_bot.main import configure_menu_button
 
 
@@ -19,6 +27,8 @@ class FakeBackend:
     def __init__(self, *, candidates: bool = False) -> None:
         self.draft: dict[str, Any] | None = None
         self.commits = 0
+        self.creates = 0
+        self.cancels = 0
         self.uploads = 0
         self.candidates = candidates
         self.events: list[str] = []
@@ -30,6 +40,7 @@ class FakeBackend:
 
     async def create(self, user_id: int, name: str) -> dict[str, Any]:
         if self.draft is None or self.draft["state"] == "committed":
+            self.creates += 1
             self.draft = {
                 "public_id": str(uuid4()),
                 "version": 0,
@@ -132,6 +143,7 @@ class FakeBackend:
         return await self.commit(self.draft, user_id, name)
 
     async def cancel(self, draft: dict[str, Any], user_id: int, name: str) -> None:
+        self.cancels += 1
         self.draft = None
 
     async def photo(
@@ -551,10 +563,11 @@ def test_new_animal_button_matches_candidate_context() -> None:
             await harness.feed(location=True)
         return [row[0].text for row in harness.markups[-1].inline_keyboard]
 
-    assert asyncio.run(run(False)) == ["🆕 Создать новое животное", "Отменить"]
+    assert asyncio.run(run(False)) == ["🆕 Создать новое животное", CANCEL]
     assert asyncio.run(run(True)) == [
         "✅ Да, это он",
         "🆕 Нет, это новое животное",
+        CANCEL,
     ]
 
 
@@ -590,7 +603,8 @@ def test_candidate_without_photo_cannot_be_confirmed_as_match() -> None:
             )
         assert "нельзя проверить совпадение" in harness.messages[-1]
         assert [row[0].text for row in harness.markups[-1].inline_keyboard] == [
-            "🆕 Нет, это новое животное"
+            "🆕 Нет, это новое животное",
+            CANCEL,
         ]
 
     asyncio.run(run())
@@ -618,9 +632,11 @@ def test_new_animal_name_and_note_can_be_kept_changed_or_cleared() -> None:
             assert (
                 sum("Совпадений не нашлось" in text for text in harness.messages) == 1
             )
+            await harness.feed(callback=harness.button("▶️ Продолжить"))
             await harness.feed(callback=harness.button("🆕 Создать новое животное"))
             await harness.feed(text=ADD)
             assert harness.flow.pending[123] == "name_initial"
+            await harness.feed(callback=harness.button("▶️ Продолжить"))
             await harness.feed(text="Бондо")
             await harness.feed(text="У пекарни")
             draft = backend.draft
@@ -829,5 +845,124 @@ def test_today_feed_uses_one_editable_photo_card_for_51_encounters() -> None:
                 button.text for button in harness.markups[-1].inline_keyboard[0]
             ]
             assert "private_location" not in "".join(harness.messages)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("state", "pending"),
+    [
+        ("need_photo", None),
+        ("need_species", None),
+        ("need_location_or_skip", None),
+        ("need_location_or_skip", "current_location"),
+        ("need_location_or_skip", "manual_location"),
+        ("choose_animal", None),
+        ("ready", "name_initial"),
+        ("ready", "name_edit"),
+        ("ready", "name_choice"),
+        ("ready", "comment"),
+        ("ready", "comment_choice"),
+        ("ready", "time_choice"),
+        ("ready", "time_manual"),
+        ("ready", "place_choice"),
+        ("ready", "current_location"),
+        ("ready", "manual_location"),
+        ("ready", None),
+    ],
+)
+def test_resume_and_visible_cancel_at_every_draft_stage(
+    state: str, pending: str | None
+) -> None:
+    async def run() -> None:
+        backend = FakeBackend(candidates=True)
+        draft = await backend.create(123, "Тест")
+        draft.update(
+            state=state,
+            species="dog",
+            photo_public_id=str(uuid4()),
+            selection="new" if state == "ready" else None,
+            new_name=None if pending == "name_initial" else "Бондо",
+            comment="У пекарни",
+            location_present=True,
+        )
+        original = dict(draft)
+        harness = Harness(backend)
+        if pending:
+            harness.flow.pending[123] = pending
+        with (
+            patch.object(harness.bot, "send_message", side_effect=harness.send_message),
+            patch.object(harness.bot, "send_photo", side_effect=harness.send_photo),
+            patch.object(Bot, "__call__", new_callable=AsyncMock),
+        ):
+            await harness.flow.resume(123, "Тест", draft)
+            expected_prompt = harness.messages[-1]
+            await harness.feed(text=ADD)
+            assert "незавершённая встреча" in harness.messages[-1]
+            assert backend.creates == 1
+            await harness.feed(callback=harness.button("▶️ Продолжить"))
+            assert harness.messages[-1] == expected_prompt
+            assert draft == original
+            markup = harness.markups[-1]
+            if hasattr(markup, "inline_keyboard"):
+                await harness.feed(callback=harness.button(CANCEL))
+            else:
+                assert any(b.text == CANCEL for row in markup.keyboard for b in row)
+                await harness.feed(text=CANCEL)
+            assert harness.messages[-1] == "Добавление встречи отменено."
+            assert await backend.current(123, "Тест") is None
+            assert backend.commits == 0
+            assert backend.cancels == 1
+            assert 123 not in harness.flow.pending
+            assert 123 not in harness.flow.last_prompt
+            await harness.feed(text=ADD)
+            assert backend.draft is not None
+            assert backend.draft["public_id"] != original["public_id"]
+            assert backend.draft["state"] == "need_photo"
+            assert backend.draft["photo_public_id"] is None
+
+    asyncio.run(run())
+
+
+def test_repeated_add_at_matching_and_confirmed_restart() -> None:
+    async def run() -> None:
+        backend = FakeBackend(candidates=True)
+        harness = Harness(backend)
+        with (
+            patch.object(harness.bot, "send_message", side_effect=harness.send_message),
+            patch.object(harness.bot, "send_photo", side_effect=harness.send_photo),
+            patch.object(harness.bot, "get_file", side_effect=harness.get_file),
+            patch.object(
+                harness.bot, "download_file", side_effect=harness.download_file
+            ),
+            patch.object(Bot, "__call__", new_callable=AsyncMock),
+        ):
+            await harness.feed(text=ADD)
+            await harness.feed(photo=True)
+            await harness.feed(callback=harness.button("🐕 Собака"))
+            await harness.feed(location=True)
+            candidate = harness.messages[-1]
+            draft = backend.draft
+            assert draft is not None
+            await harness.feed(text=ADD)
+            await harness.feed(callback=harness.button("🔄 Начать заново"))
+            assert "будет удалена" in harness.messages[-1]
+            assert backend.cancels == 0
+            assert backend.creates == 1
+            await harness.feed(callback=harness.button("↩️ Нет, продолжить"))
+            assert harness.messages[-1] == candidate
+            assert backend.draft is draft
+            await harness.feed(text=ADD)
+            await harness.feed(callback=harness.button("🔄 Начать заново"))
+            confirmation = harness.button("✅ Да, начать заново")
+            await harness.feed(callback=confirmation)
+            assert backend.cancels == 1
+            assert backend.creates == 2
+            assert backend.commits == 0
+            assert backend.draft is not None and backend.draft is not draft
+            assert backend.draft["state"] == "need_photo"
+            await harness.feed(callback=confirmation)
+            assert backend.cancels == 1
+            assert backend.creates == 2
 
     asyncio.run(run())
