@@ -21,6 +21,20 @@ class GeographyPoint(UserDefinedType[object]):
 
 
 def upgrade() -> None:
+    # Тот же lock, который требуется ALTER: старые writers не вставят NULL
+    # между проверкой и NOT NULL. Не удаляем встречи и не угадываем их фото.
+    op.execute("LOCK TABLE encounters IN ACCESS EXCLUSIVE MODE")
+    op.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM encounters WHERE photo_id IS NULL) THEN
+                RAISE EXCEPTION USING MESSAGE =
+                    'Cannot apply 20261004_03: encounters.photo_id contains NULL. '
+                    || 'Restore verified photo associations manually before retrying; '
+                    || 'no data was changed.';
+            END IF;
+        END $$
+    """)
     op.alter_column(
         "encounters", "photo_id", existing_type=postgresql.UUID(), nullable=False
     )

@@ -14,7 +14,7 @@ from pawspot.api.read import router as read_router
 from pawspot.api.social import router as social_router
 from pawspot.api.today import router as today_router
 from pawspot.config import CorsSettings
-from pawspot.db import get_engine, get_postgis_version
+from pawspot.db import check_database_readiness, get_engine
 
 app = FastAPI(title="PawSpot API", version="0.1.0")
 app.add_middleware(
@@ -47,7 +47,9 @@ def health() -> dict[str, str]:
 @app.get("/ready")
 def ready(engine: Annotated[Engine, Depends(get_engine)]) -> dict[str, str]:
     try:
-        postgis_version = get_postgis_version(engine)
+        postgis_version = check_database_readiness(engine)
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail="Database is not ready") from exc
+    if postgis_version is None:
+        raise HTTPException(status_code=503, detail="Database is not ready")
     return {"status": "ready", "postgis_version": postgis_version}

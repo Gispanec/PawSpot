@@ -4,6 +4,8 @@
 
 ## Просмотр
 
+Служебные проверки: `GET /health` — process liveness, 200 без обращения к БД. `GET /ready` — PostgreSQL/PostGIS и соответствие Alembic revision текущей схемы head приложения; 200 с `{status: "ready", postgis_version: "…"}` либо 503 с `{detail: "Database is not ready"}`. Отсутствующая, пустая, устаревшая или неизвестная revision означает not ready. Эти проверки не требуют Telegram session; readiness не выдаёт revision/параметры БД, не меняет данные и не применяет миграции.
+
 | Метод | Маршрут | Ответ |
 | --- | --- | --- |
 | GET | `/api/v1/feed?limit=20&cursor=…` | `items` и `next_cursor`; свежие Encounter по `created_at DESC, id DESC` |
