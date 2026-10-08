@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ApiClient } from './api'
 import { go } from './navigation'
 import { Photo } from './Photo'
@@ -102,24 +102,34 @@ export function AnimalPage({ api, id }: { api: ApiClient | null; id: string }) {
   const [items, setItems] = useState<EncounterCard[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
   const [error, setError] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const pagination = useRef<AbortController | null>(null)
   useEffect(() => {
+    setAnimal(null); setItems([]); setCursor(null); setError(false); setLoadingMore(false)
     if (!api) return
     let active = true
     void api.request<AnimalDetail>(`/animals/${id}`).then(result => {
       if (active) { setAnimal(result); setItems(result.timeline.items); setCursor(result.timeline.next_cursor) }
     }).catch(() => { if (active) setError(true) })
-    return () => { active = false }
+    return () => { active = false; pagination.current?.abort(); pagination.current = null }
   }, [api, id])
   if (!api) return <Info>Откройте PawSpot через Telegram, чтобы увидеть историю.</Info>
   if (error) return <Info>Не удалось открыть животное.</Info>
   if (!animal) return <Info>Загружаем историю…</Info>
   const name = animalName(animal.name, animal.species)
   async function more() {
-    if (!cursor) return
+    if (!cursor || pagination.current) return
+    const controller = new AbortController()
+    pagination.current = controller
+    setLoadingMore(true)
     try {
-      const result = await api!.request<AnimalDetail>(`/animals/${id}?cursor=${encodeURIComponent(cursor)}`)
+      const result = await api!.request<AnimalDetail>(`/animals/${id}?cursor=${encodeURIComponent(cursor)}`, { signal: controller.signal })
+      if (controller.signal.aborted || pagination.current !== controller) return
       setItems(current => [...current, ...result.timeline.items]); setCursor(result.timeline.next_cursor)
-    } catch { setError(true) }
+    } catch { if (!controller.signal.aborted && pagination.current === controller) setError(true) }
+    finally {
+      if (pagination.current === controller) { pagination.current = null; setLoadingMore(false) }
+    }
   }
   async function react(item: EncounterCard) {
     try {
@@ -136,7 +146,7 @@ export function AnimalPage({ api, id }: { api: ApiClient | null; id: string }) {
     <p className="muted">Первым встретил(а) {animal.created_by_name}{animal.first_observed_at ? ` · ${dateLabel(animal.first_observed_at)}` : ''}</p>
     <h2>История встреч</h2>
     <div className="card-grid">{items.map(item => <EncounterTile key={item.public_id} api={api} item={item} onReaction={react} />)}</div>
-    {cursor && <button className="primary-button" type="button" onClick={more}>Больше встреч</button>}
+    {cursor && <button className="primary-button" type="button" onClick={more} disabled={loadingMore}>{loadingMore ? 'Загружаем встречи…' : 'Больше встреч'}</button>}
   </>
 }
 
