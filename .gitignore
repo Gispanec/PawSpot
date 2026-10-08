@@ -25,6 +25,7 @@ frontend/dist/
 # Local data
 media/
 backups/
+*.dump
 .local/
 
 # Editors and operating systems

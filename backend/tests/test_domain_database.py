@@ -12,6 +12,27 @@ from pawspot.models import Animal, City, Encounter, Photo, Reaction, User
 
 
 @pytest.mark.integration
+def test_migrations_use_the_isolated_schema_version_table() -> None:
+    with get_engine().connect() as connection:
+        schema = connection.scalar(text("SELECT current_schema()"))
+        assert schema.startswith("pawspot_suite_")
+        assert (
+            connection.scalar(
+                text(
+                    "SELECT count(*) FROM pg_tables "
+                    "WHERE schemaname = current_schema() "
+                    "AND tablename = 'alembic_version'"
+                )
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(text("SELECT version_num FROM alembic_version"))
+            == "20261004_03"
+        )
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("latitude", "longitude"),
     [(41.7151, 44.8271), (51.5074, -0.1278), (0, 0), (0, 180), (89.999, 10)],
@@ -67,7 +88,8 @@ def test_migration_schema_and_seed() -> None:
         )
         index = connection.execute(
             text(
-                "SELECT indexdef FROM pg_indexes WHERE tablename = 'encounters' "
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                "AND tablename = 'encounters' "
                 "AND indexname = 'ix_encounters_public_location_gist'"
             )
         ).scalar_one()

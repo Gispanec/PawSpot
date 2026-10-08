@@ -1,6 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-foreach ($file in @('start-pawspot.ps1', 'run-pawspot-component.ps1')) {
+foreach ($file in @('start-pawspot.ps1', 'run-pawspot-component.ps1', 'backup-pawspot.ps1')) {
     $tokens = $null
     $parseErrors = $null
     $null = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $file), [ref]$tokens, [ref]$parseErrors)

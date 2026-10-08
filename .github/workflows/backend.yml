@@ -50,6 +50,11 @@ jobs:
       PAWSPOT_DB_NAME: pawspot_test
       PAWSPOT_DB_USER: pawspot
       PAWSPOT_DB_PASSWORD: ""
+      PAWSPOT_TEST_DB_HOST: 127.0.0.1
+      PAWSPOT_TEST_DB_PORT: 5432
+      PAWSPOT_TEST_DB_NAME: pawspot_test
+      PAWSPOT_TEST_DB_USER: pawspot
+      PAWSPOT_TEST_DB_PASSWORD: ""
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0

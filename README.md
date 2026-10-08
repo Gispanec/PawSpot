@@ -2,7 +2,7 @@
 
 PawSpot — коллекция встреч с городскими котами и собаками. Через Telegram Bot пользователь добавляет встречу: фото → вид → место или пропуск → существующее или новое животное → необязательные имя и заметка → сохранение. Telegram Mini App показывает ленту, историю животного, карту, реакции, коллекцию и профиль. Пилот закрыт для Telegram-пользователей из allowlist; открытого анонимного доступа нет.
 
-Документы: [продукт](docs/product.md), [архитектура](docs/architecture.md), [проект API](docs/api.md), [roadmap](docs/roadmap.md).
+Документы: [backup/restore](docs/backup-restore.md), [продукт](docs/product.md), [архитектура](docs/architecture.md), [проект API](docs/api.md), [roadmap](docs/roadmap.md).
 
 ## Требования
 
@@ -13,6 +13,39 @@ PawSpot — коллекция встреч с городскими котами
 Версии Python и библиотек закреплены `.python-version`, `pyproject.toml`, `backend/pyproject.toml` и `uv.lock`. Рабочая БД — PostgreSQL 18 с PostGIS 3.6. При первом запуске uv и Docker скачивают пакеты/образ через интернет. Приложение читает настройки из environment variables или локального `.env`; пароль обязателен. `.env` исключён из Git.
 
 Официальный образ `postgis/postgis:18-3.6` публикуется для amd64. Compose фиксирует эту платформу; на ARM/macOS он запускается через эмуляцию Docker и может работать медленнее.
+
+## Безопасные integration tests
+
+Не запускайте integration на БД из обычного `.env`. Suite требует явных `PAWSPOT_TEST_DB_*`, проверяет имя `pawspot_test[_suffix]` до подключения и создаёт новую схему для каждого run. В ней выполняются upgrade → downgrade → upgrade и тесты; в finally удаляется только собственная схема. При аварийном завершении процесса схема может остаться в выделенной тестовой БД, но следующий run её не использует. Fixtures не меняют пилотную БД и не используют её media.
+
+Отдельный временный PostGIS-контейнер (порт 55432, другая роль, tmpfs; данные теряются при остановке контейнера). Известный пароль `test-only-local` предназначен только для этого loopback test-контейнера, не для пилота. На ARM используется эмуляция linux/amd64 Docker Desktop.
+
+PowerShell из корня:
+
+```powershell
+docker compose -f infra/compose.test.yaml up -d --wait
+$env:PAWSPOT_TEST_DB_HOST = '127.0.0.1'
+$env:PAWSPOT_TEST_DB_PORT = '55432'
+$env:PAWSPOT_TEST_DB_NAME = 'pawspot_test'
+$env:PAWSPOT_TEST_DB_USER = 'pawspot_test'
+$env:PAWSPOT_TEST_DB_PASSWORD = 'test-only-local'
+uv run --locked --all-packages --all-extras pytest -m integration
+uv run --locked --all-packages --all-extras pytest -m integration
+docker compose -f infra/compose.test.yaml stop postgres
+```
+
+POSIX:
+
+```sh
+docker compose -f infra/compose.test.yaml up -d --wait
+export PAWSPOT_TEST_DB_HOST=127.0.0.1 PAWSPOT_TEST_DB_PORT=55432
+export PAWSPOT_TEST_DB_NAME=pawspot_test PAWSPOT_TEST_DB_USER=pawspot_test PAWSPOT_TEST_DB_PASSWORD=test-only-local
+uv run --locked --all-packages --all-extras pytest -m integration
+uv run --locked --all-packages --all-extras pytest -m integration
+docker compose -f infra/compose.test.yaml stop postgres
+```
+
+Migration downgrade вручную допустим только в отдельной тестовой БД с явно заданными **всеми** PAWSPOT_DB_*; fixture уже проверяет цикл миграций безопасно. Обычный `pytest` БД не требует. Backend/Bot writers останавливаются перед backup, процедура: [DB + photos backup/restore](docs/backup-restore.md).
 
 ## Windows PowerShell
 
@@ -64,7 +97,6 @@ uv run --locked --all-packages --all-extras pytest
 uv run --locked --all-packages --all-extras ruff check backend bot
 uv run --locked --all-packages --all-extras ruff format --check backend bot
 uv run --locked --all-packages --all-extras mypy
-uv run --locked --all-packages --all-extras pytest -m integration
 uv lock --check
 ```
 
@@ -95,7 +127,6 @@ uv run --locked --all-packages --all-extras pytest
 uv run --locked --all-packages --all-extras ruff check backend bot
 uv run --locked --all-packages --all-extras ruff format --check backend bot
 uv run --locked --all-packages --all-extras mypy
-uv run --locked --all-packages --all-extras pytest -m integration
 uv lock --check
 ```
 
@@ -116,9 +147,9 @@ docker compose --env-file .env -f infra/compose.yaml start postgres
 
 ## Сейчас реализовано
 
-`GET /health` проверяет живость FastAPI без обращения к БД. `GET /ready` выполняет `SELECT PostGIS_Version()` и возвращает версию PostGIS либо 503 при SQLAlchemy/DB ошибке. Тайм-аут подключения задаётся `PAWSPOT_DB_CONNECT_TIMEOUT_SECONDS` (по умолчанию 3). Alembic создаёт доменные таблицы, PostGIS extension и seed Тбилиси; повторный `upgrade head` безопасен. Для проверки отката на одноразовой БД: `uv run --locked --all-packages --all-extras alembic -c backend/alembic.ini downgrade base`, затем снова `upgrade head`. **Downgrade удаляет доменные таблицы и данные.**
+`GET /health` проверяет живость FastAPI без обращения к БД. `GET /ready` выполняет `SELECT PostGIS_Version()` и возвращает версию PostGIS либо 503 при SQLAlchemy/DB ошибке. Тайм-аут подключения задаётся `PAWSPOT_DB_CONNECT_TIMEOUT_SECONDS` (по умолчанию 3). Alembic создаёт доменные таблицы, PostGIS extension и seed Тбилиси; повторный `upgrade head` безопасен. Цикл upgrade/downgrade/upgrade автоматически проверяет integration fixture в собственной схеме отдельной test DB. **Ручной downgrade удаляет таблицы и данные: не выполняйте его с пилотным .env.**
 
-Геоприватность использует фиксированную сетку; радиус задаётся `PAWSPOT_PUBLIC_LOCATION_RADIUS_M` (default 200 м), смена параметра после появления опубликованных встреч требует отдельной миграции и анализа приватности. Точные точки не входят в публичную схему `EncounterPublic`, в том числе для автора. Обычный `pytest` не запускает интеграционные тесты; после миграции выполните `pytest -m integration`. CI проверяет upgrade/downgrade, constraints и PostGIS на реальной БД.
+Геоприватность использует фиксированную сетку; радиус задаётся `PAWSPOT_PUBLIC_LOCATION_RADIUS_M` (default 200 м), смена параметра после появления опубликованных встреч требует отдельной миграции и анализа приватности. Точные точки не входят в публичную схему `EncounterPublic`, в том числе для автора. Обычный `pytest` не запускает интеграционные тесты; запускайте integration только по разделу «Безопасные integration tests», никогда с конфигурацией пилота. CI проверяет upgrade/downgrade, constraints и PostGIS на реальной БД.
 
 Закрытый пилот требует `PAWSPOT_ALLOWED_TELEGRAM_IDS`, `PAWSPOT_TELEGRAM_BOT_TOKEN` и отдельный `PAWSPOT_INTERNAL_SERVICE_TOKEN` в `.env`. Пустой allowlist не даёт доступ никому. Mini App передаёт raw `initData` в `POST /api/v1/auth/telegram`, backend проверяет HMAC и время, выдаёт случайную сессию (в БД только SHA-256 токена). Bot использует внутренний service token и Telegram `from.id`; клиентский заголовок actor принимается только после проверки service token. `PAWSPOT_CORS_ORIGINS` — список конкретных origins через запятую, по умолчанию пустой. Токены и raw initData не логируются приложением. In-process лимит на auth endpoint рассчитан на один небольшой процесс пилота, не на несколько независимых воркеров.
 

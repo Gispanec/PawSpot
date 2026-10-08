@@ -1,0 +1,18 @@
+name: pawspot-tests
+services:
+  postgres:
+    image: postgis/postgis:18-3.6
+    platform: linux/amd64
+    environment:
+      POSTGRES_DB: pawspot_test
+      POSTGRES_USER: pawspot_test
+      POSTGRES_PASSWORD: test-only-local
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pawspot_test -d pawspot_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
