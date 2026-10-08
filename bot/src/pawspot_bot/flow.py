@@ -104,6 +104,28 @@ class BotFlow:
             ]
         )
 
+    def encounter_button(
+        self, encounter_public_id: str, text: str = "🐾 Открыть встречу"
+    ) -> InlineKeyboardButton | None:
+        try:
+            base = urlsplit(self.mini_app_url)
+            if (
+                base.scheme != "https"
+                or not base.hostname
+                or base.username is not None
+                or base.password is not None
+                or any(char.isspace() for char in base.netloc)
+            ):
+                return None
+            # urlsplit проверяет порт только при обращении к этому свойству.
+            _ = base.port
+        except ValueError:
+            return None
+        encounter_url = urlunsplit(
+            (base.scheme, base.netloc, f"/encounter/{encounter_public_id}", "", "")
+        )
+        return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=encounter_url))
+
     async def error(self, user_id: int, exc: BackendError, name: str) -> None:
         logger.warning("Backend request failed with status %s", exc.status_code)
         if exc.status_code == 409:
@@ -419,25 +441,11 @@ class BotFlow:
                 InlineKeyboardButton(text="Далее ▶️", callback_data=f"today:{index + 1}")
             )
         markup_rows = [navigation]
-        if self.mini_app_url:
-            base = urlsplit(self.mini_app_url)
-            encounter_url = urlunsplit(
-                (
-                    base.scheme,
-                    base.netloc,
-                    f"/encounter/{item['encounter_public_id']}",
-                    "",
-                    "",
-                )
-            )
-            markup_rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="🐾 Открыть в PawSpot",
-                        web_app=WebAppInfo(url=encounter_url),
-                    )
-                ]
-            )
+        encounter_button = self.encounter_button(
+            str(item["encounter_public_id"]), "🐾 Открыть в PawSpot"
+        )
+        if encounter_button is not None:
+            markup_rows.append([encounter_button])
         markup = InlineKeyboardMarkup(inline_keyboard=markup_rows)
         photo = await self.backend.photo(
             str(item["photo_public_id"]), user_id, name, variant="main"
@@ -854,8 +862,9 @@ class BotFlow:
             )
             self.pending.pop(user_id, None)
             self.last_prompt.pop(user_id, None)
-            await self.result(user_id, name, result)
+            # Commit уже успешен: ошибка уведомления не должна повторять сохранение.
             self.delivered[user_id] = draft_marker
+            await self.result(user_id, name, result)
             return
         draft = await self.backend.current(user_id, name)
         if draft is None or marker(draft) != draft_marker:
@@ -1002,17 +1011,34 @@ class BotFlow:
         caption = f"{species} {title}\nВстреча сохранена в PawSpot."
         if result.get("comment"):
             caption += f"\n{result['comment']}"
+        button = self.encounter_button(str(result["encounter_public_id"]))
+        markup: InlineKeyboardMarkup | ReplyKeyboardMarkup = self.menu()
+        if button is not None:
+            markup = InlineKeyboardMarkup(inline_keyboard=[[button]])
+            try:
+                await self.say(
+                    user_id,
+                    "Можно добавить следующую встречу — меню снова доступно.",
+                    reply_markup=self.menu(),
+                )
+            except TelegramAPIError as exc:
+                logger.warning("Result menu delivery failed: %s", type(exc).__name__)
         try:
             photo = await self.backend.photo(result["photo_public_id"], user_id, name)
             await self.bot.send_photo(
                 user_id,
                 BufferedInputFile(photo, filename="pawspot.jpg"),
                 caption=caption,
-                reply_markup=self.menu(),
+                reply_markup=markup,
             )
         except (BackendError, TelegramAPIError) as exc:
             logger.warning("Result photo unavailable: %s", type(exc).__name__)
-            await self.say(user_id, caption, reply_markup=self.menu())
+            try:
+                await self.say(user_id, caption, reply_markup=markup)
+            except TelegramAPIError as exc:
+                logger.warning(
+                    "Result confirmation delivery failed: %s", type(exc).__name__
+                )
 
 
 def create_dispatcher(flow: BotFlow) -> Dispatcher:

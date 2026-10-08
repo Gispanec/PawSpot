@@ -124,7 +124,9 @@ class FakeBackend:
         if draft["state"] != "committed":
             self.commits += 1
             draft["state"] = "committed"
+            draft["encounter_public_id"] = str(uuid4())
         return {
+            "encounter_public_id": draft["encounter_public_id"],
             "species": draft["species"],
             "animal_name": (
                 draft["new_name"]
@@ -265,8 +267,11 @@ class Harness:
         raise AssertionError(f"Missing button {label}")
 
 
-async def scenario(backend: FakeBackend, actions: str) -> Harness:
+async def scenario(
+    backend: FakeBackend, actions: str, *, mini_app_url: str = ""
+) -> Harness:
     harness = Harness(backend)
+    harness.flow.mini_app_url = mini_app_url
     with (
         patch.object(harness.bot, "send_message", side_effect=harness.send_message),
         patch.object(harness.bot, "send_photo", side_effect=harness.send_photo),
