@@ -227,7 +227,9 @@ def test_upgrade_refuses_legacy_photoless_encounters_without_data_loss(
             connection.scalar(text("SELECT version_num FROM alembic_version"))
             == PREVIOUS
         )
-        assert not inspect(connection).has_table("encounter_drafts")
+        assert not inspect(connection).has_table(
+            "encounter_drafts", schema=config.attributes["version_table_schema"]
+        )
         assert photo_nullable(connection) == "YES"
 
 
