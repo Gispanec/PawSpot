@@ -77,3 +77,10 @@ class CollectionAnimal(BaseModel):
     name: str | None
     species: str
     thumbnail_photo_id: UUID | None
+
+
+class CollectionPickerPage(BaseModel):
+    items: list[CandidateView]
+    page: int
+    page_size: int
+    has_next: bool

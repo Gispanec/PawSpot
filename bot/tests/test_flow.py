@@ -87,6 +87,7 @@ class FakeBackend:
             draft["state"] = "ready"
         if "animal_public_id" in fields:
             draft["selection"] = "existing"
+            draft["animal_public_id"] = fields["animal_public_id"]
             draft["selected_animal_name"] = "Гиви"
             draft["state"] = "ready"
         if "comment" in fields:
@@ -292,7 +293,7 @@ async def scenario(
         else:
             new_label = (
                 "🆕 Нет, это новое животное"
-                if backend.candidates and "no_location" not in actions
+                if backend.candidates or "no_location" in actions
                 else "🆕 Создать новое животное"
             )
             await harness.feed(callback=harness.button(new_label))
@@ -326,7 +327,7 @@ def test_telegram_happy_paths(actions: str, candidates: bool) -> None:
     assert harness.markups[-1].keyboard[1][0].text == TODAY
     assert harness.markups[-1].keyboard[1][1].text == ABOUT
     assert ("matches" in backend.events) == ("no_location" not in actions)
-    assert ("collection" in backend.events) == ("no_location" in actions)
+    assert "collection" not in backend.events
     assert backend.draft is not None
     assert backend.draft["new_name"] == ("Бондо" if "name" in actions else None)
     assert backend.draft["comment"] == ("У пекарни" if "comment" in actions else None)

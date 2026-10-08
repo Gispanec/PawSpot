@@ -1,8 +1,17 @@
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from sqlalchemy import exists, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -15,6 +24,7 @@ from pawspot.photos import InvalidPhoto, process_photo
 from pawspot.schemas.workflow import (
     CandidateView,
     CollectionAnimal,
+    CollectionPickerPage,
     CommitRequest,
     DraftPatch,
     DraftView,
@@ -22,6 +32,7 @@ from pawspot.schemas.workflow import (
 )
 from pawspot.services.encounters import (
     active_draft,
+    collection_picker,
     commit_draft,
     draft_view,
     encounter_view,
@@ -161,6 +172,33 @@ def build_router(prefix: str, actor_dependency: Callable[..., User]) -> APIRoute
     @router.get("/users/me/collection", response_model=list[CollectionAnimal])
     def collection(actor: Actor, session: Database) -> list[CollectionAnimal]:
         return own_collection(session, actor)
+
+    if prefix == "/internal/v1":
+
+        @router.get("/users/me/collection-picker", response_model=CollectionPickerPage)
+        def picker(
+            actor: Actor,
+            session: Database,
+            species: Literal["cat", "dog"],
+            page: Annotated[int, Query(ge=1, le=100000)] = 1,
+            page_size: Annotated[int, Query(ge=1, le=5)] = 5,
+            q: Annotated[str, Query(max_length=80)] = "",
+        ) -> CollectionPickerPage:
+            return collection_picker(session, actor, species, page, page_size, q)
+
+        @router.get(
+            "/users/me/collection-picker/{animal_id}", response_model=CandidateView
+        )
+        def picker_animal(
+            animal_id: UUID,
+            species: Literal["cat", "dog"],
+            actor: Actor,
+            session: Database,
+        ) -> CandidateView:
+            page = collection_picker(session, actor, species, animal_id=animal_id)
+            if not page.items:
+                raise HTTPException(status_code=404, detail="Animal unavailable")
+            return page.items[0]
 
     @router.get("/photos/{photo_id}/{variant}")
     def get_photo(

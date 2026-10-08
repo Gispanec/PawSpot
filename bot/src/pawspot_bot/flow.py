@@ -2,6 +2,7 @@ import asyncio
 import io
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -52,6 +53,15 @@ def choice(action: str, draft: dict[str, Any], value: str = "") -> str:
     return f"{action}:{draft_key}:{draft['version']}:{value}"
 
 
+@dataclass
+class PickerState:
+    key: tuple[str, int, str]
+    page: int = 1
+    query: str = ""
+    items: list[dict[str, Any]] = field(default_factory=list)
+    selected: str | None = None
+
+
 class BotFlow:
     def __init__(
         self,
@@ -69,6 +79,7 @@ class BotFlow:
         self.delivered: dict[int, str] = {}
         self.last_prompt: dict[int, tuple[str, int, str]] = {}
         self.add_locks: dict[int, asyncio.Lock] = {}
+        self.pickers: dict[int, PickerState] = {}
 
     async def say(self, user_id: int, text: str, **kwargs: Any) -> None:
         await self.bot.send_message(user_id, text, **kwargs)
@@ -251,6 +262,7 @@ class BotFlow:
     def clear_ui(self, user_id: int) -> None:
         self.pending.pop(user_id, None)
         self.last_prompt.pop(user_id, None)
+        self.pickers.pop(user_id, None)
 
     async def cancel(
         self, user_id: int, name: str, draft: dict[str, Any] | None = None
@@ -492,16 +504,22 @@ class BotFlow:
         elif state == "need_location_or_skip":
             await self.ask_location(user_id, draft)
         elif state == "choose_animal":
-            candidates = (
-                await self.backend.matches(draft, user_id, name)
-                if draft["location_present"]
-                else await self.backend.collection(user_id, name)
-            )
-            heading = (
-                "Возможно, его уже встречали. Сравните фотографии:"
-                if draft["location_present"]
-                else "Сравните фото с животными из вашей коллекции:"
-            )
+            if not draft["location_present"]:
+                self.pending.pop(user_id, None)
+                self.pickers.pop(user_id, None)
+                await self.say(
+                    user_id,
+                    "Вы уже встречали это животное раньше?",
+                    reply_markup=buttons(
+                        ("🆕 Нет, это новое животное", choice("animal", draft, "new")),
+                        ("🐾 Да, выбрать из коллекции", choice("cp", draft, "1")),
+                        cancel,
+                    ),
+                )
+                self.last_prompt[user_id] = self.prompt_key(draft, state)
+                return
+            candidates = await self.backend.matches(draft, user_id, name)
+            heading = "Возможно, его уже встречали. Сравните фотографии:"
             if not candidates:
                 heading = "Совпадений не нашлось. Можно создать новое животное."
                 await self.say(
@@ -522,13 +540,21 @@ class BotFlow:
         self.last_prompt[user_id] = self.prompt_key(draft, state)
 
     async def candidate(
-        self, user_id: int, name: str, draft: dict[str, Any], item: dict[str, Any]
+        self,
+        user_id: int,
+        name: str,
+        draft: dict[str, Any],
+        item: dict[str, Any],
+        *,
+        from_collection: bool = False,
     ) -> None:
         species = "собака" if item["species"] == "dog" else "кот"
         title = item["name"] or "Без имени"
         caption = f"{'🐕' if item['species'] == 'dog' else '🐈'} {title} · {species}"
         if item.get("last_observed_at"):
             last_seen = datetime.fromisoformat(item["last_observed_at"])
+            if from_collection:
+                last_seen = last_seen.astimezone(ZoneInfo(draft["city_timezone"]))
             caption += f"\nПоследняя встреча: {last_seen:%d.%m.%Y}"
         if item.get("encounter_count"):
             caption += f" · всего встреч: {item['encounter_count']}"
@@ -537,11 +563,19 @@ class BotFlow:
         animal_id = str(item.get("animal_public_id", item.get("public_id"))).replace(
             "-", ""
         )
-        markup = buttons(
-            ("✅ Да, это он", choice("animal", draft, animal_id)),
+        if from_collection:
+            caption += f"\nID: #{animal_id[-8:]}"
+        rows = [
+            (
+                "✅ Да, это он",
+                choice("ca" if from_collection else "animal", draft, animal_id),
+            ),
             ("🆕 Нет, это новое животное", choice("animal", draft, "new")),
             (CANCEL, choice("cancel", draft)),
-        )
+        ]
+        if from_collection:
+            rows.insert(1, ("↩️ Вернуться к списку", choice("cl", draft)))
+        markup = buttons(*rows)
         photo_id = item.get("thumbnail_photo_id")
         if photo_id:
             try:
@@ -559,11 +593,111 @@ class BotFlow:
                 logger.warning("Candidate photo unavailable: %s", type(exc).__name__)
         await self.say(
             user_id,
-            f"{caption}\nФото недоступно — нельзя проверить совпадение.",
-            reply_markup=buttons(
+            f"{caption}\n"
+            + (
+                "Фото недоступно. Подтвердите только если узнали животное по данным."
+                if from_collection
+                else "Фото недоступно — нельзя проверить совпадение."
+            ),
+            reply_markup=markup
+            if from_collection
+            else buttons(
                 ("🆕 Нет, это новое животное", choice("animal", draft, "new")),
                 (CANCEL, choice("cancel", draft)),
             ),
+        )
+
+    def picker_state(self, user_id: int, draft: dict[str, Any]) -> PickerState:
+        key = self.prompt_key(draft, str(draft["species"]))
+        state = self.pickers.get(user_id)
+        if state is None or state.key != key:
+            state = PickerState(key)
+            self.pickers[user_id] = state
+        return state
+
+    async def collection_page(
+        self,
+        user_id: int,
+        name: str,
+        draft: dict[str, Any],
+        page_number: int,
+        *,
+        edit_message_id: int | None = None,
+    ) -> None:
+        state = self.picker_state(user_id, draft)
+        page = await self.backend.collection_picker(
+            user_id, name, draft["species"], page_number, state.query
+        )
+        if not page["items"] and page_number > 1:
+            # Коллекция могла сократиться; возвращаем действительную страницу.
+            page = await self.backend.collection_picker(
+                user_id, name, draft["species"], 1, state.query
+            )
+        state.page = page["page"]
+        state.items = page["items"]
+        state.selected = None
+        self.pending.pop(user_id, None)
+        kind = "🐕 Выберите собаку" if draft["species"] == "dog" else "🐈 Выберите кота"
+        text = f"{kind} из вашей коллекции\nСтраница {state.page}."
+        if state.query:
+            text += f"\nПоиск: {state.query}"
+        rows = []
+        zone = ZoneInfo(draft["city_timezone"])
+        for item in state.items:
+            animal_id = str(item["animal_public_id"]).replace("-", "")
+            date = datetime.fromisoformat(item["last_observed_at"]).astimezone(zone)
+            label = f"{item['name'] or 'Без имени'} · {date:%d.%m} · #{animal_id[-8:]}"
+            rows.append((label, choice("co", draft, animal_id)))
+        if not state.items:
+            text += (
+                "\nНичего не найдено. Измените запрос или вернитесь ко всей коллекции."
+                if state.query
+                else "\nВ вашей коллекции пока нет животных этого вида."
+            )
+        if state.page > 1:
+            rows.append(("⬅️ Назад", choice("cp", draft, str(state.page - 1))))
+        if page["has_next"]:
+            rows.append(("➡️ Далее", choice("cp", draft, str(state.page + 1))))
+        rows.append(("🔎 Найти по имени", choice("cs", draft)))
+        if state.query:
+            rows.append(("Сбросить поиск", choice("cc", draft)))
+        rows.extend(
+            [
+                ("🆕 Это новое животное", choice("animal", draft, "new")),
+                ("↩️ К выбору", choice("cb", draft)),
+                (CANCEL, choice("cancel", draft)),
+            ]
+        )
+        markup = buttons(*rows)
+        if edit_message_id is not None:
+            try:
+                await self.bot.edit_message_text(
+                    text,
+                    chat_id=user_id,
+                    message_id=edit_message_id,
+                    reply_markup=markup,
+                )
+            except TelegramAPIError as exc:
+                if "message is not modified" not in str(exc).lower():
+                    await self.say(user_id, text, reply_markup=markup)
+        else:
+            await self.say(user_id, text, reply_markup=markup)
+        self.last_prompt[user_id] = self.prompt_key(draft, "collection")
+
+    async def unavailable_animal(
+        self,
+        user_id: int,
+        name: str,
+        draft: dict[str, Any],
+        exc: BackendError,
+    ) -> None:
+        if exc.status_code not in {404, 422}:
+            raise exc
+        await self.say(
+            user_id, "Животное больше недоступно. Выберите из актуального списка."
+        )
+        await self.collection_page(
+            user_id, name, draft, self.picker_state(user_id, draft).page
         )
 
     async def confirm(self, user_id: int, name: str, draft: dict[str, Any]) -> None:
@@ -683,6 +817,21 @@ class BotFlow:
             return
         if draft["state"] == "need_location_or_skip" and value == SKIP:
             await self.location(user_id, name, None, None)
+            return
+        if draft["state"] == "choose_animal" and field == "collection_search":
+            state = self.pickers.get(user_id)
+            if state is None or state.key != self.prompt_key(
+                draft, str(draft["species"])
+            ):
+                self.clear_ui(user_id)
+                await self.render(user_id, name, draft)
+                return
+            query = value.strip()
+            if not query or len(query) > 80:
+                await self.say(user_id, "Отправьте часть имени: от 1 до 80 символов.")
+                return
+            state.query = query
+            await self.collection_page(user_id, name, draft, 1)
             return
         if field == "manual_location":
             await self.say(
@@ -822,6 +971,13 @@ class BotFlow:
             return
         parts = data.split(":", 3)
         if len(parts) != 4 or parts[0] not in {
+            "cp",
+            "cs",
+            "cc",
+            "cb",
+            "cl",
+            "co",
+            "ca",
             "species",
             "animal",
             "skipname",
@@ -860,8 +1016,7 @@ class BotFlow:
             result = await self.backend.commit_id(
                 draft_marker, int(version_text), user_id, name
             )
-            self.pending.pop(user_id, None)
-            self.last_prompt.pop(user_id, None)
+            self.clear_ui(user_id)
             # Commit уже успешен: ошибка уведомления не должна повторять сохранение.
             self.delivered[user_id] = draft_marker
             await self.result(user_id, name, result)
@@ -871,14 +1026,96 @@ class BotFlow:
             await self.retire_callback(callback, user_id)
             await self.say(user_id, "Эта кнопка устарела. Нажмите /start.")
             return
-        if action == "cancel":
-            await self.cancel(user_id, name, draft)
-            return
         if not version_text.isdigit() or int(version_text) != draft["version"]:
             await self.retire_callback(callback, user_id)
             self.clear_ui(user_id)
             await self.say(user_id, "Эта кнопка устарела. Показываю актуальный шаг.")
             await self.render(user_id, name, draft)
+            return
+        if action == "cancel":
+            await self.cancel(user_id, name, draft)
+            return
+        if action in {"cp", "cs", "cc", "cb", "cl", "co", "ca"}:
+            if draft["state"] != "choose_animal" or draft["location_present"]:
+                await self.retire_callback(callback, user_id)
+                await self.resume(user_id, name, draft)
+                return
+            state = self.picker_state(user_id, draft)
+            if action == "cb":
+                await self.retire_callback(callback, user_id)
+                self.clear_ui(user_id)
+                await self.render(user_id, name, draft)
+            elif action == "cs":
+                state.selected = None
+                self.pending[user_id] = "collection_search"
+                await self.say(
+                    user_id,
+                    "Отправьте часть имени животного (до 80 символов).",
+                    reply_markup=buttons(
+                        ("↩️ Вернуться к списку", choice("cl", draft)),
+                        ("🆕 Это новое животное", choice("animal", draft, "new")),
+                        (CANCEL, choice("cancel", draft)),
+                    ),
+                )
+            elif action in {"cp", "cc", "cl"}:
+                if action == "cp" and (
+                    not value.isdigit() or not 1 <= int(value) <= 100000
+                ):
+                    return
+                if action == "cc":
+                    state.query = ""
+                await self.collection_page(
+                    user_id,
+                    name,
+                    draft,
+                    int(value)
+                    if action == "cp"
+                    else 1
+                    if action == "cc"
+                    else state.page,
+                    edit_message_id=(
+                        callback.message.message_id
+                        if callback.message and action in {"cp", "cc"}
+                        else None
+                    ),
+                )
+                if action == "cl":
+                    await self.retire_callback(callback, user_id)
+            elif action == "co":
+                if state.selected == value:
+                    return
+                if not any(
+                    str(i["animal_public_id"]).replace("-", "") == value
+                    for i in state.items
+                ):
+                    await self.collection_page(user_id, name, draft, state.page)
+                    return
+                try:
+                    item = await self.backend.collection_animal(
+                        user_id, name, draft["species"], value
+                    )
+                except BackendError as exc:
+                    await self.unavailable_animal(user_id, name, draft, exc)
+                    return
+                await self.retire_callback(callback, user_id)
+                self.pending.pop(user_id, None)
+                state.selected = value
+                await self.candidate(user_id, name, draft, item, from_collection=True)
+            elif action == "ca":
+                if state.selected != value:
+                    await self.retire_callback(callback, user_id)
+                    await self.collection_page(user_id, name, draft, state.page)
+                    return
+                try:
+                    draft = await self.backend.patch(
+                        draft, user_id, name, animal_public_id=value
+                    )
+                except BackendError as exc:
+                    await self.unavailable_animal(user_id, name, draft, exc)
+                    return
+                await self.retire_callback(callback, user_id)
+                self.pickers.pop(user_id, None)
+                await self.ask_comment(user_id, draft)
             return
         if action in {"resume", "restart_no"}:
             await self.resume(user_id, name, draft)
@@ -951,8 +1188,9 @@ class BotFlow:
         elif action == "animal" and draft["state"] == "choose_animal":
             if value == "new":
                 draft = await self.backend.patch(draft, user_id, name, new_animal={})
+                self.pickers.pop(user_id, None)
                 await self.ask_name(user_id, draft)
-            elif len(value) == 32:
+            elif len(value) == 32 and draft["location_present"]:
                 draft = await self.backend.patch(
                     draft, user_id, name, animal_public_id=value
                 )

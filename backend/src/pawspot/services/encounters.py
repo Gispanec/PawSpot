@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import cast, func, select
+from sqlalchemy import cast, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ from pawspot.models import (
 from pawspot.schemas.workflow import (
     CandidateView,
     CollectionAnimal,
+    CollectionPickerPage,
     DraftPatch,
     DraftView,
     EncounterView,
@@ -201,6 +202,16 @@ def update_draft(
             animal is None
             or animal.status != "active"
             or animal.species != draft.species
+        ):
+            raise HTTPException(status_code=422, detail="Animal unavailable")
+        if draft.public_location is None and not session.scalar(
+            select(
+                exists().where(
+                    Encounter.animal_id == animal.id,
+                    Encounter.user_id == actor.id,
+                    Encounter.deleted_at.is_(None),
+                )
+            )
         ):
             raise HTTPException(status_code=422, detail="Animal unavailable")
         draft.selection = "existing"
@@ -416,3 +427,50 @@ def own_collection(session: Session, actor: User) -> list[CollectionAnimal]:
         )
         for a in animals
     ]
+
+
+def collection_picker(
+    session: Session,
+    actor: User,
+    species: str,
+    page: int = 1,
+    page_size: int = 5,
+    q: str = "",
+    animal_id: UUID | None = None,
+) -> CollectionPickerPage:
+    query = (
+        select(Animal, func.max(Encounter.observed_at), func.count(Encounter.id))
+        .join(Encounter, Encounter.animal_id == Animal.id)
+        .where(
+            Encounter.user_id == actor.id,
+            Encounter.deleted_at.is_(None),
+            Animal.status == "active",
+            Animal.species == species,
+        )
+        .group_by(Animal.id)
+        .order_by(func.max(Encounter.observed_at).desc(), Animal.id.desc())
+    )
+    if q.strip():
+        query = query.where(Animal.name.icontains(q.strip(), autoescape=True))
+    if animal_id is not None:
+        query = query.where(Animal.id == animal_id)
+    # Одна дополнительная строка определяет следующую страницу без COUNT всего списка.
+    rows = session.execute(
+        query.offset((page - 1) * page_size).limit(page_size + 1)
+    ).all()
+    return CollectionPickerPage(
+        items=[
+            CandidateView(
+                animal_public_id=animal.id,
+                name=animal.name,
+                species=animal.species,
+                thumbnail_photo_id=animal.primary_photo_id,
+                last_observed_at=last_seen,
+                encounter_count=count,
+            )
+            for animal, last_seen, count in rows[:page_size]
+        ],
+        page=page,
+        page_size=page_size,
+        has_next=len(rows) > page_size,
+    )

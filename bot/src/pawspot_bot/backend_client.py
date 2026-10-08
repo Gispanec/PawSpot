@@ -28,6 +28,7 @@ class BackendClient:
         json: dict[str, Any] | None = None,
         files: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
+        params: dict[str, str | int] | None = None,
     ) -> Any:
         encoded_name = base64.urlsafe_b64encode(display_name[:64].encode()).decode()
         headers = {
@@ -37,7 +38,13 @@ class BackendClient:
         }
         try:
             response = await self._client.request(
-                method, path, headers=headers, json=json, files=files, data=data
+                method,
+                path,
+                headers=headers,
+                json=json,
+                files=files,
+                data=data,
+                params=params,
             )
         except httpx.RequestError as exc:
             raise BackendError() from exc
@@ -123,6 +130,34 @@ class BackendClient:
             dict[str, Any],
             await self.request(
                 "GET", f"/internal/v1/feed/today?page={page}&page_size=1", user_id, name
+            ),
+        )
+
+    async def collection_picker(
+        self, user_id: int, name: str, species: str, page: int = 1, q: str = ""
+    ) -> dict[str, Any]:
+        return cast(
+            dict[str, Any],
+            await self.request(
+                "GET",
+                "/internal/v1/users/me/collection-picker",
+                user_id,
+                name,
+                params={"species": species, "page": page, "page_size": 5, "q": q},
+            ),
+        )
+
+    async def collection_animal(
+        self, user_id: int, name: str, species: str, animal_id: str
+    ) -> dict[str, Any]:
+        return cast(
+            dict[str, Any],
+            await self.request(
+                "GET",
+                f"/internal/v1/users/me/collection-picker/{animal_id}",
+                user_id,
+                name,
+                params={"species": species},
             ),
         )
 
