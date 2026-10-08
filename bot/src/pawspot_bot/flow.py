@@ -104,17 +104,43 @@ class BotFlow:
             ]
         )
 
-    async def error(self, user_id: int, exc: BackendError) -> None:
+    async def error(self, user_id: int, exc: BackendError, name: str) -> None:
+        logger.warning("Backend request failed with status %s", exc.status_code)
+        if exc.status_code == 409:
+            self.clear_ui(user_id)
+            try:
+                draft = await self.backend.current(user_id, name)
+                if draft is None:
+                    await self.error(user_id, BackendError(404), name)
+                else:
+                    await self.say(
+                        user_id,
+                        "Черновик изменился. Показываю актуальный шаг.",
+                        reply_markup=self.active_menu(),
+                    )
+                    await self.render(user_id, name, draft)
+            except BackendError as refresh_error:
+                if refresh_error.status_code in {403, 404, 410}:
+                    await self.error(user_id, refresh_error, name)
+                else:
+                    logger.warning(
+                        "Draft refresh failed with status %s", refresh_error.status_code
+                    )
+                    await self.say(
+                        user_id,
+                        "Не удалось загрузить актуальный черновик. "
+                        "Попробуйте /start ещё раз чуть позже.",
+                        reply_markup=self.active_menu(),
+                    )
+            return
         if exc.status_code == 403:
             text = "Доступ к закрытому пилоту пока не открыт для вашего аккаунта."
         elif exc.status_code in {404, 410}:
-            self.pending.pop(user_id, None)
+            self.clear_ui(user_id)
             text = (
                 "Черновик больше недоступен. Нажмите «Добавить встречу», "
                 "чтобы начать заново."
             )
-        elif exc.status_code == 409:
-            text = "Черновик изменился. Показываю его текущее состояние."
         elif exc.status_code in {413, 415}:
             text = (
                 "Фото не подошло. Отправьте обычное фото JPEG, PNG или WebP до 10 МБ."
@@ -123,8 +149,23 @@ class BotFlow:
             text = "Эти данные не подошли. Проверьте выбор или отправьте другое место."
         else:
             text = "Сервис временно недоступен. Попробуйте ещё раз чуть позже."
-        logger.warning("Backend request failed with status %s", exc.status_code)
-        await self.say(user_id, text)
+        await self.say(
+            user_id,
+            text,
+            **({"reply_markup": self.menu()} if exc.status_code in {404, 410} else {}),
+        )
+
+    async def retire_callback(self, callback: CallbackQuery, user_id: int) -> None:
+        if callback.message is None:
+            return
+        try:
+            await self.bot.edit_message_reply_markup(
+                chat_id=user_id,
+                message_id=callback.message.message_id,
+                reply_markup=None,
+            )
+        except TelegramAPIError as exc:
+            logger.warning("Stale keyboard removal failed: %s", type(exc).__name__)
 
     async def start(self, user_id: int, name: str) -> None:
         draft = await self.backend.current(user_id, name)
@@ -818,12 +859,15 @@ class BotFlow:
             return
         draft = await self.backend.current(user_id, name)
         if draft is None or marker(draft) != draft_marker:
+            await self.retire_callback(callback, user_id)
             await self.say(user_id, "Эта кнопка устарела. Нажмите /start.")
             return
         if action == "cancel":
             await self.cancel(user_id, name, draft)
             return
         if not version_text.isdigit() or int(version_text) != draft["version"]:
+            await self.retire_callback(callback, user_id)
+            self.clear_ui(user_id)
             await self.say(user_id, "Эта кнопка устарела. Показываю актуальный шаг.")
             await self.render(user_id, name, draft)
             return
@@ -981,7 +1025,7 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
         try:
             await flow.start(message.from_user.id, message.from_user.full_name)
         except BackendError as exc:
-            await flow.error(message.from_user.id, exc)
+            await flow.error(message.from_user.id, exc, message.from_user.full_name)
 
     @router.message(Command("about", "help"), F.chat.type == "private")
     @router.message(F.text == ABOUT, F.chat.type == "private")
@@ -998,7 +1042,7 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
         try:
             await flow.cancel(user_id, name)
         except BackendError as exc:
-            await flow.error(user_id, exc)
+            await flow.error(user_id, exc, name)
 
     @router.message(F.text == ADD, F.chat.type == "private")
     async def add(message: Message) -> None:
@@ -1007,7 +1051,7 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
         try:
             await flow.add(message.from_user.id, message.from_user.full_name)
         except BackendError as exc:
-            await flow.error(message.from_user.id, exc)
+            await flow.error(message.from_user.id, exc, message.from_user.full_name)
 
     @router.message(F.text == TODAY, F.chat.type == "private")
     async def today(message: Message) -> None:
@@ -1016,7 +1060,7 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
         try:
             await flow.today(message.from_user.id, message.from_user.full_name)
         except BackendError as exc:
-            await flow.error(message.from_user.id, exc)
+            await flow.error(message.from_user.id, exc, message.from_user.full_name)
 
     @router.message(F.photo, F.chat.type == "private")
     async def photo(message: Message) -> None:
@@ -1025,7 +1069,7 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
         try:
             await flow.photo(message, message.from_user.id, message.from_user.full_name)
         except BackendError as exc:
-            await flow.error(message.from_user.id, exc)
+            await flow.error(message.from_user.id, exc, message.from_user.full_name)
 
     @router.message(F.location, F.chat.type == "private")
     async def location(message: Message) -> None:
@@ -1039,7 +1083,7 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
                 message.location.longitude,
             )
         except BackendError as exc:
-            await flow.error(message.from_user.id, exc)
+            await flow.error(message.from_user.id, exc, message.from_user.full_name)
 
     @router.message(F.text, F.chat.type == "private")
     async def text(message: Message) -> None:
@@ -1050,7 +1094,7 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
                 message.from_user.id, message.from_user.full_name, message.text
             )
         except BackendError as exc:
-            await flow.error(message.from_user.id, exc)
+            await flow.error(message.from_user.id, exc, message.from_user.full_name)
 
     @router.callback_query(F.message.chat.type == "private")
     async def callback(query: CallbackQuery) -> None:
@@ -1058,7 +1102,9 @@ def create_dispatcher(flow: BotFlow) -> Dispatcher:
         try:
             await flow.callback(query, query.from_user.id, query.from_user.full_name)
         except BackendError as exc:
-            await flow.error(query.from_user.id, exc)
+            if exc.status_code in {404, 409, 410}:
+                await flow.retire_callback(query, query.from_user.id)
+            await flow.error(query.from_user.id, exc, query.from_user.full_name)
 
     dispatcher = Dispatcher()
     dispatcher.include_router(router)

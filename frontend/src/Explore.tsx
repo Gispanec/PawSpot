@@ -52,22 +52,31 @@ export function MapPage({ api, focus }: { api: ApiClient | null; focus: MapFocus
   useEffect(() => {
     if (!map || !api) return
     let active = true
+    let generation = 0
+    let controller: AbortController | null = null
     const load = () => {
+      const requestGeneration = ++generation
+      controller?.abort()
+      const request = new AbortController()
+      controller = request
       const bounds = map.getBounds()
       const values = {
         south: bounds.getSouth(), west: bounds.getWest(),
         north: bounds.getNorth(), east: bounds.getEast(),
       }
       if (values.north - values.south > 2 || values.east - values.west > 2) {
-        setMarkers([]); return
+        setMarkers([]); setError(false); return
       }
       const query = new URLSearchParams(Object.entries(values).map(([key, value]) => [key, String(value)]))
       if (species !== 'all') query.set('species', species)
-      void api.request<MapMarker[]>(`/map/animals?${query}`).then(result => { if (active) { setMarkers(result); setError(false) } }).catch(() => { if (active) setError(true) })
+      const isCurrent = () => active && generation === requestGeneration && !request.signal.aborted
+      void api.request<MapMarker[]>(`/map/animals?${query}`, { signal: request.signal })
+        .then(result => { if (isCurrent()) { setMarkers(result); setError(false) } })
+        .catch(() => { if (isCurrent()) setError(true) })
     }
     map.on('moveend', load)
     load()
-    return () => { active = false; map.off('moveend', load) }
+    return () => { active = false; controller?.abort(); map.off('moveend', load) }
   }, [map, api, species])
   useEffect(() => {
     if (!map || !focus) return
