@@ -80,9 +80,19 @@ class BotFlow:
         self.last_prompt: dict[int, tuple[str, int, str]] = {}
         self.add_locks: dict[int, asyncio.Lock] = {}
         self.pickers: dict[int, PickerState] = {}
+        # После перезапуска клавиатура клиента неизвестна до успешной отправки меню.
+        self.reply_menu_users: set[int] = set()
 
     async def say(self, user_id: int, text: str, **kwargs: Any) -> None:
+        markup = kwargs.get("reply_markup")
+        if isinstance(markup, ReplyKeyboardMarkup):
+            self.reply_menu_users.discard(user_id)
         await self.bot.send_message(user_id, text, **kwargs)
+        if isinstance(markup, ReplyKeyboardMarkup) and markup in (
+            self.menu(),
+            self.active_menu(),
+        ):
+            self.reply_menu_users.add(user_id)
 
     def menu(self) -> ReplyKeyboardMarkup:
         return ReplyKeyboardMarkup(
@@ -800,11 +810,14 @@ class BotFlow:
             if latitude is not None and longitude is not None
             else None
         )
+        if position is None:
+            await self.location_without_place(user_id, name, draft)
+            return
         draft = await self.backend.patch(draft, user_id, name, location=position)
         self.pending.pop(user_id, None)
         await self.say(
             user_id,
-            "Место принято." if position else "Место пропущено.",
+            "Место принято.",
             reply_markup=self.active_menu(),
         )
         await self.render(user_id, name, draft)
@@ -1238,9 +1251,10 @@ class BotFlow:
     ) -> None:
         draft = await self.backend.patch(draft, user_id, name, location=None)
         self.pending.pop(user_id, None)
-        await self.say(
-            user_id, "Продолжаем без места.", reply_markup=self.active_menu()
-        )
+        if user_id not in self.reply_menu_users:
+            await self.say(
+                user_id, "📍 Место не указано", reply_markup=self.active_menu()
+            )
         await self.render(user_id, name, draft)
 
     async def result(self, user_id: int, name: str, result: dict[str, Any]) -> None:
@@ -1256,7 +1270,7 @@ class BotFlow:
             try:
                 await self.say(
                     user_id,
-                    "Можно добавить следующую встречу — меню снова доступно.",
+                    "✅ Готово",
                     reply_markup=self.menu(),
                 )
             except TelegramAPIError as exc:
@@ -1269,6 +1283,8 @@ class BotFlow:
                 caption=caption,
                 reply_markup=markup,
             )
+            if isinstance(markup, ReplyKeyboardMarkup):
+                self.reply_menu_users.add(user_id)
         except (BackendError, TelegramAPIError) as exc:
             logger.warning("Result photo unavailable: %s", type(exc).__name__)
             try:

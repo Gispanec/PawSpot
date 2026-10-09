@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from aiogram import Bot
-from aiogram.types import File, Update
+from aiogram.types import File, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 
 from pawspot_bot.backend_client import BackendClient, BackendError
 from pawspot_bot.flow import (
@@ -341,6 +341,168 @@ def test_telegram_happy_paths(actions: str, candidates: bool) -> None:
     assert (
         "Изменить заметку" if "comment" in actions else "Добавить заметку"
     ) in preview_buttons
+
+
+@pytest.mark.parametrize("skip", ["callback", "text"])
+@pytest.mark.parametrize("location_mode", ["choice", "current", "manual"])
+def test_skip_location_restores_only_special_keyboard(
+    skip: str,
+    location_mode: str,
+) -> None:
+    async def run() -> None:
+        backend = FakeBackend()
+        harness = Harness(backend)
+        with (
+            patch.object(harness.bot, "send_message", side_effect=harness.send_message),
+            patch.object(harness.bot, "send_photo", side_effect=harness.send_photo),
+            patch.object(harness.bot, "get_file", side_effect=harness.get_file),
+            patch.object(
+                harness.bot, "download_file", side_effect=harness.download_file
+            ),
+            patch.object(Bot, "__call__", new_callable=AsyncMock),
+        ):
+            await harness.feed(text=ADD)
+            await harness.feed(photo=True)
+            await harness.feed(callback=harness.button("🐕 Собака"))
+            draft = backend.draft
+            assert draft is not None
+            old_here = choice("here", draft)
+            if location_mode == "current":
+                await harness.feed(callback=old_here)
+                assert harness.markups[-1].keyboard[0][0].request_location
+            elif location_mode == "manual":
+                await harness.feed(callback=choice("elsewhere", draft))
+            count = len(harness.messages)
+            photo_count = len(harness.sent_photos)
+            if skip == "callback":
+                await harness.feed(callback=choice("noloc", draft))
+            else:
+                await harness.feed(text="Пропустить")
+            assert harness.messages[count:] == (
+                ["📍 Место не указано", "Вы уже встречали это животное раньше?"]
+                if location_mode == "current"
+                else ["Вы уже встречали это животное раньше?"]
+            )
+            if location_mode == "current":
+                markup = harness.markups[-2]
+                assert isinstance(markup, ReplyKeyboardMarkup)
+                assert [[b.text for b in row] for row in markup.keyboard] == [
+                    [ADD],
+                    [CANCEL],
+                    [TODAY, ABOUT],
+                ]
+                assert not any(
+                    b.request_location for row in markup.keyboard for b in row
+                )
+            assert isinstance(harness.markups[-1], InlineKeyboardMarkup)
+            assert harness.button("🐾 Да, выбрать из коллекции")
+            assert draft["state"] == "choose_animal"
+            assert draft["photo_public_id"] is not None
+            assert not draft["location_present"]
+            assert "collection" not in backend.events
+            assert "matches" not in backend.events
+            assert len(harness.sent_photos) == photo_count
+            version = draft["version"]
+            await harness.feed(callback=old_here)
+            await harness.feed(location=True)
+            assert draft["version"] == version
+            assert not draft["location_present"]
+            assert harness.flow.pending.get(123) is None
+            await harness.feed(callback=choice("animal", draft, "new"))
+            assert harness.flow.pending[123] == "name_initial"
+            assert backend.commits == 0
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("location_mode", ["choice", "current", "manual"])
+def test_preview_skip_location_keeps_animal_and_restores_keyboard(
+    location_mode: str,
+) -> None:
+    async def run() -> None:
+        backend = FakeBackend()
+        draft = await backend.create(123, "Тест")
+        draft.update(
+            state="ready",
+            species="dog",
+            selection="existing",
+            animal_public_id="known-animal",
+            selected_animal_name="Бондо",
+            photo_public_id="photo",
+            comment="У пекарни",
+            location_present=True,
+        )
+        harness = Harness(backend)
+        with (
+            patch.object(harness.bot, "send_message", side_effect=harness.send_message),
+            patch.object(harness.bot, "send_photo", side_effect=harness.send_photo),
+            patch.object(Bot, "__call__", new_callable=AsyncMock),
+        ):
+            await harness.feed(text="/start")
+            await harness.feed(callback=harness.button("Изменить место"))
+            if location_mode != "choice":
+                await harness.feed(
+                    callback=harness.button(
+                        "📍 Я ещё здесь"
+                        if location_mode == "current"
+                        else "🗺 Указать другое место"
+                    )
+                )
+            count = len(harness.messages)
+            await harness.feed(callback=choice("noloc", draft))
+            assert len(harness.messages) - count == (
+                2 if location_mode == "current" else 1
+            )
+            assert "Проверьте встречу" in harness.messages[-1]
+            assert "📍 Без места" in harness.messages[-1]
+            if location_mode == "current":
+                assert harness.messages[-2] == "📍 Место не указано"
+                assert isinstance(harness.markups[-2], ReplyKeyboardMarkup)
+            assert draft["animal_public_id"] == "known-animal"
+            assert draft["selection"] == "existing"
+            assert draft["comment"] == "У пекарни"
+            assert harness.flow.pending.get(123) is None
+            assert backend.commits == 0
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("resume", ["start", "continue"])
+def test_skip_after_process_restart_restores_unknown_keyboard(resume: str) -> None:
+    async def run() -> None:
+        backend = FakeBackend()
+        draft = await backend.create(123, "Тест")
+        draft.update(
+            state="need_location_or_skip", species="dog", photo_public_id="photo"
+        )
+        harness = Harness(backend)
+        with (
+            patch.object(harness.bot, "send_message", side_effect=harness.send_message),
+            patch.object(Bot, "__call__", new_callable=AsyncMock),
+        ):
+            if resume == "start":
+                await harness.feed(text="/start")
+            else:
+                await harness.feed(text=ADD)
+                await harness.feed(callback=harness.button("▶️ Продолжить"))
+            count = len(harness.messages)
+            await harness.feed(callback=harness.button("⏭ Без места"))
+            assert len(harness.messages) - count == (1 if resume == "start" else 2)
+            if resume == "continue":
+                assert harness.messages[-2] == "📍 Место не указано"
+                assert isinstance(harness.markups[-2], ReplyKeyboardMarkup)
+            assert harness.messages[-1] == "Вы уже встречали это животное раньше?"
+            assert draft["photo_public_id"] == "photo"
+            assert backend.creates == 1
+            await harness.feed(callback=harness.button(CANCEL))
+            assert isinstance(harness.markups[-1], ReplyKeyboardMarkup)
+            assert not harness.flow.pending
+            await harness.feed(text=ADD)
+            assert backend.draft is not None
+            assert backend.draft["state"] == "need_photo"
+            assert backend.commits == 0
+
+    asyncio.run(run())
 
 
 def test_restart_resume_cancel_and_stale_callback() -> None:

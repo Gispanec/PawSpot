@@ -48,10 +48,17 @@ def test_saved_photo_opens_new_encounter_and_restores_menu(existing: bool) -> No
     assert backend.draft["selection"] == ("existing" if existing else "new")
     assert backend.commits == 1
     assert harness.sent_photos[-1] == b"thumbnail"
+    expected_caption = (
+        "🐕 Гиви\nВстреча сохранена в PawSpot."
+        if existing
+        else "🐕 Бондо\nВстреча сохранена в PawSpot.\nУ пекарни"
+    )
+    assert harness.messages[-1] == expected_caption
     assert "Встреча сохранена в PawSpot." in harness.messages[-1]
     assert sum("Встреча сохранена" in text for text in harness.messages) == 1
     assert_menu(harness.markups[-2])
-    assert "меню снова доступно" in harness.messages[-2]
+    assert harness.messages[-2] == "✅ Готово"
+    assert harness.messages.count("✅ Готово") == 1
     assert_encounter_button(harness.markups[-1], backend.draft["encounter_public_id"])
 
 
@@ -105,7 +112,7 @@ def test_notification_errors_never_repeat_commit(failure: str) -> None:
         async def send_message(chat_id: int, text: str, **kwargs: Any) -> None:
             if (
                 failure == "all"
-                or (failure == "menu" and "меню снова доступно" in text)
+                or (failure == "menu" and text == "✅ Готово")
                 or (failure == "fallback" and "Встреча сохранена" in text)
             ):
                 raise TelegramBadRequest(
@@ -150,6 +157,7 @@ def test_notification_errors_never_repeat_commit(failure: str) -> None:
         elif failure in {"photo", "download"}:
             assert harness.sent_photos == []
             assert len(harness.messages) == 2
+            assert harness.messages[0] == "✅ Готово"
             assert_menu(harness.markups[0])
 
     asyncio.run(run())
@@ -211,6 +219,8 @@ def test_repeated_save_while_notification_pending_does_not_commit_again() -> Non
                 release.set()
                 await first
         assert len(harness.messages) == 2
+        assert harness.messages[0] == "✅ Готово"
+        assert_menu(harness.markups[0])
         assert harness.sent_photos == [b"thumbnail"]
         assert_encounter_button(harness.markups[-1], draft["encounter_public_id"])
 
