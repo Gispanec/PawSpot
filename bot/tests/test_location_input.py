@@ -29,6 +29,7 @@ async def prepare_location(harness: Harness, preview: bool = False) -> None:
     if preview:
         harness.backend.candidates = True
         await harness.feed(location=True)
+        await harness.feed(callback=harness.button("🔎 Проверить животных рядом"))
         await harness.feed(callback=harness.button("✅ Да, это он"))
         await harness.feed(text="У пекарни")
         await harness.feed(callback=harness.button("Изменить место"))
@@ -168,6 +169,7 @@ def test_unexpected_text_gets_one_hint_without_rendering(
         if stage == "choose_nearby":
             harness.backend.candidates = True
             await harness.feed(location=True)
+            await harness.feed(callback=harness.button("🔎 Проверить животных рядом"))
         draft = harness.backend.draft
         assert draft is not None
         snapshot = dict(draft)

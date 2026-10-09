@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -63,6 +64,18 @@ class PickerState:
     selected: str | None = None
 
 
+@dataclass
+class NearbyState:
+    key: tuple[str, int, str]
+    items: list[dict[str, Any]]
+    token: str = field(default_factory=lambda: uuid4().hex[:8])
+    revision: int = 0
+    index: int = 0
+    message_id: int | None = None
+    has_photo: bool = False
+    confirmable: bool = False
+
+
 class BotFlow:
     def __init__(
         self,
@@ -81,6 +94,8 @@ class BotFlow:
         self.last_prompt: dict[int, tuple[str, int, str]] = {}
         self.add_locks: dict[int, asyncio.Lock] = {}
         self.pickers: dict[int, PickerState] = {}
+        self.nearby: dict[int, NearbyState] = {}
+        self.selection_locks: dict[int, asyncio.Lock] = {}
         # После перезапуска клавиатура клиента неизвестна до успешной отправки меню.
         self.reply_menu_users: set[int] = set()
 
@@ -274,6 +289,7 @@ class BotFlow:
         self.pending.pop(user_id, None)
         self.last_prompt.pop(user_id, None)
         self.pickers.pop(user_id, None)
+        self.nearby.pop(user_id, None)
 
     async def cancel(
         self, user_id: int, name: str, draft: dict[str, Any] | None = None
@@ -516,9 +532,10 @@ class BotFlow:
         elif state == "need_location_or_skip":
             await self.ask_location(user_id, draft)
         elif state == "choose_animal":
+            self.pending.pop(user_id, None)
+            self.pickers.pop(user_id, None)
+            self.nearby.pop(user_id, None)
             if not draft["location_present"]:
-                self.pending.pop(user_id, None)
-                self.pickers.pop(user_id, None)
                 await self.say(
                     user_id,
                     "Вы уже встречали это животное раньше?",
@@ -530,26 +547,191 @@ class BotFlow:
                 )
                 self.last_prompt[user_id] = self.prompt_key(draft, state)
                 return
-            candidates = await self.backend.matches(draft, user_id, name)
-            heading = "Возможно, его уже встречали. Сравните фотографии:"
-            if not candidates:
-                heading = "Совпадений не нашлось. Можно создать новое животное."
-                await self.say(
-                    user_id,
-                    heading,
-                    reply_markup=buttons(
-                        ("🆕 Создать новое животное", choice("animal", draft, "new")),
-                        cancel,
-                    ),
-                )
-            else:
-                await self.say(user_id, heading)
-                for item in candidates[:5]:
-                    await self.candidate(user_id, name, draft, item)
+            await self.say(
+                user_id,
+                "📍 Место указано. Что делаем дальше?",
+                reply_markup=buttons(
+                    ("🔎 Проверить животных рядом", choice("near", draft)),
+                    ("🆕 Это новое животное", choice("animal", draft, "new")),
+                    ("🐾 Выбрать из моей коллекции", choice("cp", draft, "1")),
+                    cancel,
+                ),
+            )
         elif state == "ready":
             await self.confirm(user_id, name, draft)
             return
         self.last_prompt[user_id] = self.prompt_key(draft, state)
+
+    async def nearby_card(
+        self, user_id: int, name: str, draft: dict[str, Any], state: NearbyState
+    ) -> None:
+        state.revision += 1
+        state.confirmable = False
+        item = state.items[state.index]
+        token = f"{state.token}.{state.revision}"
+        species = "🐕" if item["species"] == "dog" else "🐈"
+        caption = f"{species} {item['name'] or 'Без имени'}"
+        if item.get("last_observed_at"):
+            date = datetime.fromisoformat(item["last_observed_at"]).astimezone(
+                ZoneInfo(draft["city_timezone"])
+            )
+            caption += f"\nПоследняя встреча: {date:%d.%m.%Y}"
+        caption += f"\nВсего встреч: {item.get('encounter_count', 0)}"
+        caption += f"\n{state.index + 1} из {len(state.items)}"
+        photo = None
+        if item.get("thumbnail_photo_id"):
+            try:
+                photo = await self.backend.photo(
+                    str(item["thumbnail_photo_id"]), user_id, name, variant="main"
+                )
+            except BackendError as exc:
+                logger.warning("Nearby photo unavailable: %s", exc.status_code)
+        rows = []
+        if photo is not None:
+            rows.append(
+                ("✅ Да, это он", choice("nyes", draft, f"{token}.{state.index}"))
+            )
+        else:
+            caption += "\nФото недоступно — нельзя проверить совпадение."
+        if state.index > 0:
+            rows.append(
+                ("⬅️ Назад", choice("npage", draft, f"{token}.{state.index - 1}"))
+            )
+        if state.index + 1 < len(state.items):
+            rows.append(
+                ("➡️ Следующее", choice("npage", draft, f"{token}.{state.index + 1}"))
+            )
+        rows.extend(
+            [
+                ("↩️ Назад к выбору", choice("cb", draft)),
+                ("🆕 Это новое животное", choice("animal", draft, "new")),
+                (CANCEL, choice("cancel", draft)),
+            ]
+        )
+        markup = buttons(*rows)
+        if state.message_id is not None:
+            try:
+                if photo is not None:
+                    await self.bot.edit_message_media(
+                        chat_id=user_id,
+                        message_id=state.message_id,
+                        media=InputMediaPhoto(
+                            media=BufferedInputFile(photo, filename="candidate.jpg"),
+                            caption=caption,
+                        ),
+                        reply_markup=markup,
+                    )
+                    state.has_photo = state.confirmable = True
+                    return
+                if not state.has_photo:
+                    await self.bot.edit_message_text(
+                        caption,
+                        chat_id=user_id,
+                        message_id=state.message_id,
+                        reply_markup=markup,
+                    )
+                    return
+            except TelegramAPIError as exc:
+                logger.warning("Nearby card edit failed: %s", type(exc).__name__)
+            # Не оставляем фото предыдущего животного рядом с данными следующего.
+            try:
+                await self.bot.edit_message_reply_markup(
+                    chat_id=user_id,
+                    message_id=state.message_id,
+                    reply_markup=None,
+                )
+            except TelegramAPIError as exc:
+                logger.warning("Nearby keyboard removal failed: %s", type(exc).__name__)
+        if photo is not None:
+            try:
+                sent = await self.bot.send_photo(
+                    user_id,
+                    BufferedInputFile(photo, filename="candidate.jpg"),
+                    caption=caption,
+                    reply_markup=markup,
+                )
+                state.message_id = sent.message_id if sent else None
+                state.has_photo = state.confirmable = True
+                return
+            except TelegramAPIError as exc:
+                logger.warning("Nearby photo delivery failed: %s", type(exc).__name__)
+                caption += "\nФото недоступно — нельзя проверить совпадение."
+                markup = buttons(*rows[1:])
+        sent_text = await self.bot.send_message(user_id, caption, reply_markup=markup)
+        state.message_id = sent_text.message_id if sent_text else None
+        state.has_photo = False
+
+    async def nearby_callback(
+        self,
+        callback: CallbackQuery,
+        user_id: int,
+        name: str,
+        draft: dict[str, Any],
+        action: str,
+        value: str,
+    ) -> None:
+        if draft["state"] != "choose_animal" or not draft["location_present"]:
+            return
+        key = self.prompt_key(draft, "nearby")
+        state = self.nearby.get(user_id)
+        if action == "near":
+            if self.last_prompt.get(user_id) != self.prompt_key(draft, "choose_animal"):
+                return
+            items = await self.backend.matches(draft, user_id, name)
+            state = NearbyState(key, items[:5])
+            self.nearby[user_id] = state
+            self.last_prompt[user_id] = key
+            await self.retire_callback(callback, user_id)
+            if not state.items:
+                await self.say(
+                    user_id,
+                    "Похожих встреч поблизости не найдено.",
+                    reply_markup=buttons(
+                        ("🆕 Создать новое животное", choice("animal", draft, "new")),
+                        ("🐾 Выбрать из моей коллекции", choice("cp", draft, "1")),
+                        ("↩️ Назад к выбору", choice("cb", draft)),
+                        (CANCEL, choice("cancel", draft)),
+                    ),
+                )
+                return
+            await self.nearby_card(user_id, name, draft, state)
+            return
+        if state is None or state.key != key or self.last_prompt.get(user_id) != key:
+            if self.last_prompt.get(user_id) is None:
+                await self.resume(user_id, name, draft)
+            return
+        parts = value.split(".")
+        if len(parts) != 3 or parts[:2] != [state.token, str(state.revision)]:
+            return
+        if not parts[2].isdigit():
+            return
+        index = int(parts[2])
+        if action == "npage":
+            if 0 <= index < len(state.items) and abs(index - state.index) == 1:
+                state.index = index
+                await self.nearby_card(user_id, name, draft, state)
+        elif index == state.index and state.confirmable:
+            item = state.items[index]
+            try:
+                draft = await self.backend.patch(
+                    draft,
+                    user_id,
+                    name,
+                    animal_public_id=item["animal_public_id"],
+                )
+            except BackendError as exc:
+                if exc.status_code not in {404, 422}:
+                    raise exc
+                self.clear_ui(user_id)
+                await self.retire_callback(callback, user_id)
+                await self.say(
+                    user_id, "Животное больше недоступно. Проверьте список заново."
+                )
+                await self.render(user_id, name, draft)
+                return
+            await self.retire_callback(callback, user_id)
+            self.nearby.pop(user_id, None)
+            await self.ask_comment(user_id, draft)
 
     async def candidate(
         self,
@@ -992,6 +1174,32 @@ class BotFlow:
         self.last_prompt[user_id] = self.prompt_key(draft, "comment")
 
     async def callback(self, callback: CallbackQuery, user_id: int, name: str) -> None:
+        # Перелистывание и подтверждение одной карточки обрабатываются последовательно.
+        action = (callback.data or "").split(":", 1)[0]
+        if action in {
+            "near",
+            "npage",
+            "nyes",
+            "cp",
+            "cs",
+            "cc",
+            "cb",
+            "cl",
+            "co",
+            "ca",
+            "animal",
+            "cancel",
+            "resume",
+            "restart_yes",
+        }:
+            async with self.selection_locks.setdefault(user_id, asyncio.Lock()):
+                await self.handle_callback(callback, user_id, name)
+        else:
+            await self.handle_callback(callback, user_id, name)
+
+    async def handle_callback(
+        self, callback: CallbackQuery, user_id: int, name: str
+    ) -> None:
         data = callback.data or ""
         if data.startswith("today:"):
             if data == "today:noop":
@@ -1008,6 +1216,9 @@ class BotFlow:
             return
         parts = data.split(":", 3)
         if len(parts) != 4 or parts[0] not in {
+            "near",
+            "npage",
+            "nyes",
             "cp",
             "cs",
             "cc",
@@ -1072,11 +1283,15 @@ class BotFlow:
         if action == "cancel":
             await self.cancel(user_id, name, draft)
             return
+        if action in {"near", "npage", "nyes"}:
+            await self.nearby_callback(callback, user_id, name, draft, action, value)
+            return
         if action in {"cp", "cs", "cc", "cb", "cl", "co", "ca"}:
-            if draft["state"] != "choose_animal" or draft["location_present"]:
+            if draft["state"] != "choose_animal":
                 await self.retire_callback(callback, user_id)
                 await self.resume(user_id, name, draft)
                 return
+            self.nearby.pop(user_id, None)
             state = self.picker_state(user_id, draft)
             if action == "cb":
                 await self.retire_callback(callback, user_id)
@@ -1226,12 +1441,8 @@ class BotFlow:
             if value == "new":
                 draft = await self.backend.patch(draft, user_id, name, new_animal={})
                 self.pickers.pop(user_id, None)
+                self.nearby.pop(user_id, None)
                 await self.ask_name(user_id, draft)
-            elif len(value) == 32 and draft["location_present"]:
-                draft = await self.backend.patch(
-                    draft, user_id, name, animal_public_id=value
-                )
-                await self.ask_comment(user_id, draft)
         elif draft["state"] == "ready" and action == "skipname":
             await self.ask_comment(user_id, draft)
         elif draft["state"] == "ready" and action == "skipcomment":

@@ -288,13 +288,17 @@ async def scenario(
             await harness.feed(text="Пропустить")
         else:
             await harness.feed(location=True)
+            if backend.candidates:
+                await harness.feed(
+                    callback=harness.button("🔎 Проверить животных рядом")
+                )
         if "existing" in actions:
             await harness.feed(callback=harness.button("✅ Да, это он"))
         else:
             new_label = (
                 "🆕 Нет, это новое животное"
-                if backend.candidates or "no_location" in actions
-                else "🆕 Создать новое животное"
+                if "no_location" in actions
+                else "🆕 Это новое животное"
             )
             await harness.feed(callback=harness.button(new_label))
             if "name" in actions:
@@ -326,7 +330,9 @@ def test_telegram_happy_paths(actions: str, candidates: bool) -> None:
     assert harness.markups[-1].keyboard[0][0].text == ADD
     assert harness.markups[-1].keyboard[1][0].text == TODAY
     assert harness.markups[-1].keyboard[1][1].text == ABOUT
-    assert ("matches" in backend.events) == ("no_location" not in actions)
+    assert ("matches" in backend.events) == (
+        candidates and "no_location" not in actions
+    )
     assert "collection" not in backend.events
     assert backend.draft is not None
     assert backend.draft["new_name"] == ("Бондо" if "name" in actions else None)
@@ -704,9 +710,9 @@ def test_repeated_add_reuses_draft_without_repeated_prompts() -> None:
 def test_candidates_show_photo_and_existing_animal_in_preview() -> None:
     backend = FakeBackend(candidates=True)
     harness = asyncio.run(scenario(backend, "existing"))
-    assert any("Возможно, его уже встречали" in text for text in harness.messages)
+    assert any("1 из 1" in text for text in harness.messages)
     assert any("Последняя встреча: 03.10.2026" in text for text in harness.messages)
-    assert any("всего встреч: 3" in text for text in harness.messages)
+    assert any("Всего встреч: 3" in text for text in harness.messages)
     assert any("Гиви (уже встречали)" in text for text in harness.messages)
     assert harness.sent_photos.count(b"main") == 2  # кандидат и итоговый preview
     assert all("private_location" not in text for text in harness.messages)
@@ -731,12 +737,13 @@ def test_new_animal_button_matches_candidate_context() -> None:
             await harness.feed(location=True)
         return [row[0].text for row in harness.markups[-1].inline_keyboard]
 
-    assert asyncio.run(run(False)) == ["🆕 Создать новое животное", CANCEL]
-    assert asyncio.run(run(True)) == [
-        "✅ Да, это он",
-        "🆕 Нет, это новое животное",
-        CANCEL,
-    ]
+    for candidates in (False, True):
+        assert asyncio.run(run(candidates)) == [
+            "🔎 Проверить животных рядом",
+            "🆕 Это новое животное",
+            "🐾 Выбрать из моей коллекции",
+            CANCEL,
+        ]
 
 
 def test_candidate_can_be_rejected_as_new_animal() -> None:
@@ -745,7 +752,7 @@ def test_candidate_can_be_rejected_as_new_animal() -> None:
     assert backend.draft is not None
     assert backend.draft["selection"] == "new"
     assert backend.draft["new_name"] == "Бондо"
-    assert any("Возможно, его уже встречали" in text for text in harness.messages)
+    assert any("1 из 1" in text for text in harness.messages)
     assert any("Бондо (новое)" in text for text in harness.messages)
 
 
@@ -798,10 +805,14 @@ def test_new_animal_name_and_note_can_be_kept_changed_or_cleared() -> None:
             assert harness.markups[-2].keyboard[0][0].text == ADD
             await harness.feed(text=ADD)
             assert (
-                sum("Совпадений не нашлось" in text for text in harness.messages) == 1
+                sum(
+                    "📍 Место указано. Что делаем дальше?" in text
+                    for text in harness.messages
+                )
+                == 1
             )
             await harness.feed(callback=harness.button("▶️ Продолжить"))
-            await harness.feed(callback=harness.button("🆕 Создать новое животное"))
+            await harness.feed(callback=harness.button("🆕 Это новое животное"))
             await harness.feed(text=ADD)
             assert harness.flow.pending[123] == "name_initial"
             await harness.feed(callback=harness.button("▶️ Продолжить"))
@@ -865,7 +876,7 @@ def test_draft_values_survive_new_bot_flow_instance() -> None:
             await first.feed(photo=True)
             await first.feed(callback=first.button("🐕 Собака"))
             await first.feed(location=True)
-            await first.feed(callback=first.button("🆕 Создать новое животное"))
+            await first.feed(callback=first.button("🆕 Это новое животное"))
             await first.feed(text="Бондо")
             await first.feed(text="У пекарни")
         second = Harness(backend)
@@ -900,7 +911,7 @@ def test_delayed_encounter_time_and_place_edits_preserve_draft() -> None:
             await harness.feed(callback=harness.button("🗺 Указать другое место"))
             assert "Выбрать место на карте" in harness.messages[-1]
             await harness.feed(location=True)
-            await harness.feed(callback=harness.button("🆕 Создать новое животное"))
+            await harness.feed(callback=harness.button("🆕 Это новое животное"))
             await harness.feed(text="Бондо")
             await harness.feed(text="У пекарни")
             assert "🕒 Сегодня" in harness.messages[-1]
