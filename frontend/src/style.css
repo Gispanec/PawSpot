@@ -3,8 +3,9 @@
 body { margin: 0; }
 button { font: inherit; }
 .app-shell { min-height: 100dvh; padding-bottom: calc(82px + env(safe-area-inset-bottom)); }
-.topbar { display: flex; justify-content: space-between; align-items: center; padding: 22px 20px 12px; max-width: 900px; margin: auto; }
-.brand { color: #2c6b4e; font-size: 24px; font-weight: 800; letter-spacing: -.045em; }
+.topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 22px 20px 12px; max-width: 900px; margin: auto; }
+.brand { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; height: 32px; color: var(--tg-theme-text-color, #2c6b4e); font-size: 24px; font-weight: 800; letter-spacing: -.045em; line-height: 1; }
+.brand-symbol { display: block; flex: 0 0 48px; width: 48px; height: 48px; padding: 2px; border-radius: 12px; background: #fffdf8; object-fit: contain; }
 .topbar-note { font-size: 11px; color: var(--tg-theme-hint-color, #809087); text-align: right; max-width: 130px; }
 .page { max-width: 900px; margin: auto; padding: 30px 20px; }
 .eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .17em; color: #83a17b; }
@@ -16,7 +17,8 @@ h1 { font-size: clamp(32px, 9vw, 48px); line-height: 1.05; letter-spacing: -.06e
 .bottom-nav button.active { color: #2c6b4e; font-weight: 800; }
 .nav-icon { font-size: 26px; line-height: 1; }
 .center-state { min-height: 100dvh; display: grid; align-content: center; justify-items: center; text-align: center; gap: 8px; padding: 32px; }
-.center-state p { color: var(--tg-theme-hint-color, #748078); max-width: 30ch; }
+.state-logo { display: block; width: clamp(208px, 60vw, 280px); max-width: 100%; height: auto; padding: 16px; margin-bottom: 16px; border-radius: 24px; background: #fffdf8; }
+.center-state p { color: var(--tg-theme-hint-color, #748078); max-width: 30ch; overflow-wrap: anywhere; }
 .page-heading { margin-bottom: 26px; }
 .page-heading .intro { margin-bottom: 0; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 20px; }
@@ -82,6 +84,7 @@ h2 { margin: 30px 0 15px; letter-spacing: -.04em; }
 .profile-card strong { font-size: 23px; }.profile-card p { color: #829082; margin: 4px 0 0; }
 .avatar { display: grid; place-items: center; width: 64px; height: 64px; flex: 0 0 64px; border-radius: 50%; background: #e4efdc; font-size: 30px; }
 @media (min-width: 700px) { .collection-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 359px) { .topbar-note { display: none; } }
 @media (max-width: 420px) {
   .page { padding: 22px 14px; }
   .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
