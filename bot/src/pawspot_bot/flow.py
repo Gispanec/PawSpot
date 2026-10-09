@@ -30,6 +30,7 @@ ADD = "📸 Добавить встречу"
 ABOUT = "ℹ️ О PawSpot"
 TODAY = "🐾 Сегодня встретили"
 SKIP = "Пропустить"
+WITHOUT_LOCATION = "⏭ Без места"
 CANCEL = "❌ Отменить"
 
 
@@ -352,7 +353,7 @@ class BotFlow:
         choices = [
             ("📍 Я ещё здесь", choice("here", draft)),
             ("🗺 Указать другое место", choice("elsewhere", draft)),
-            ("⏭ Без места", choice("noloc", draft)),
+            (WITHOUT_LOCATION, choice("noloc", draft)),
         ]
         if draft["state"] == "ready":
             choices.append(("Оставить место", choice("keepplace", draft)))
@@ -376,6 +377,7 @@ class BotFlow:
                             text="📍 Отправить текущую точку", request_location=True
                         )
                     ],
+                    [KeyboardButton(text=WITHOUT_LOCATION)],
                     [KeyboardButton(text=CANCEL)],
                 ],
                 resize_keyboard=True,
@@ -828,8 +830,19 @@ class BotFlow:
         if draft is None:
             await self.start(user_id, name)
             return
-        if draft["state"] == "need_location_or_skip" and value == SKIP:
-            await self.location(user_id, name, None, None)
+        awaiting_location = draft["state"] == "need_location_or_skip" or (
+            draft["state"] == "ready"
+            and field in {"current_location", "manual_location"}
+        )
+        if awaiting_location and value in {SKIP, WITHOUT_LOCATION}:
+            await self.location_without_place(user_id, name, draft)
+            return
+        if awaiting_location and field == "current_location":
+            await self.say(
+                user_id,
+                "📍 Сейчас ожидаю геопозицию. Нажмите «Отправить текущую точку» "
+                "внизу или выберите «⏭ Без места».",
+            )
             return
         if draft["state"] == "choose_animal" and field == "collection_search":
             state = self.pickers.get(user_id)
@@ -846,12 +859,23 @@ class BotFlow:
             state.query = query
             await self.collection_page(user_id, name, draft, 1)
             return
-        if field == "manual_location":
+        if awaiting_location and field == "manual_location":
             await self.say(
                 user_id,
                 "Отправьте точку через скрепку → Геопозиция → Выбрать место "
                 "на карте. Или вернитесь к preview.",
             )
+            return
+        hints = {
+            "need_photo": "📸 Отправьте фотографию животного, чтобы продолжить.",
+            "need_species": "Выберите кошку или собаку с помощью кнопок выше.",
+            "need_location_or_skip": (
+                "📍 Выберите место с помощью кнопок выше или продолжите без места."
+            ),
+            "choose_animal": "Выберите вариант с помощью кнопок выше.",
+        }
+        if draft["state"] in hints:
+            await self.say(user_id, hints[draft["state"]])
             return
         if draft["state"] == "ready" and field == "time_manual":
             value = value.strip()

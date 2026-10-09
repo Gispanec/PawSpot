@@ -193,6 +193,37 @@ def test_search_pagination_clear_and_return(picker: Harness) -> None:
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("card", [False, True])
+def test_unexpected_text_does_not_reload_collection(
+    picker: Harness, card: bool
+) -> None:
+    async def run() -> None:
+        backend = cast(PickerBackend, picker.backend)
+        await picker.feed(text="/start")
+        await picker.feed(callback=picker.button("🐾 Да, выбрать из коллекции"))
+        if card:
+            await picker.feed(callback=first_animal(picker))
+        assert backend.draft is not None
+        snapshot = dict(backend.draft)
+        pages = list(backend.pages)
+        opened = list(backend.opened)
+        photos = len(picker.sent_photos)
+        prompts = dict(picker.flow.last_prompt)
+        for text in ("Ррр", "Другой текст"):
+            count = len(picker.messages)
+            await picker.feed(text=text)
+            assert picker.messages[count:] == [
+                "Выберите вариант с помощью кнопок выше."
+            ]
+            assert backend.draft == snapshot
+            assert backend.pages == pages
+            assert backend.opened == opened
+            assert len(picker.sent_photos) == photos
+            assert picker.flow.last_prompt == prompts
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("stage", ["question", "list", "search", "card"])
 def test_cancel_and_old_buttons_do_not_change_replacement(
     picker: Harness, stage: str
