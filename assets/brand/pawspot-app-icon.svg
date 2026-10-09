@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640" role="img" aria-labelledby="title desc">
+  <style>
+    .ps-background-fill { fill: #DFF3E4; }
+    .ps-mint-fill { fill: #98D2AC; }
+    .ps-shadow-fill { fill: #B9E3C5; }
+    .ps-white-fill { fill: #FFFFFF; }
+    .ps-green-stroke { stroke: #2C6B4E; }
+    .ps-green-fill { fill: #2C6B4E; }
+    .ps-ear-fill { fill: #C99B8E; }
+    .ps-white-stroke { stroke: #FFFFFF; }
+    .ps-orange-fill { fill: #F5A34C; }
+  </style>
+  <title id="title">PawSpot — иконка приложения</title>
+  <desc id="desc">Знак PawSpot на светло-зелёном квадрате со скруглёнными углами.</desc>
+  <rect id="background" width="640" height="640" rx="132" class="ps-background-fill"/>
+  <g transform="translate(45 45) scale(.86)"><g id="symbol" transform="translate(-160 -100)" stroke-linecap="round" stroke-linejoin="round">
+    <g id="accents" class="ps-mint-fill">
+      <ellipse id="ground" cx="471" cy="613" rx="185" ry="37" class="ps-shadow-fill"/>
+      <path d="M 302,498 C 314,494 315,499 307,507 L 272,545
+        C 253,568 227,549 239,527 C 245,516 261,513 302,498 Z"/>
+      <path d="M 640,465 L 682,437 C 706,421 723,443 713,462
+        C 708,474 691,473 644,478 C 634,479 633,471 640,465 Z"/>
+      <path d="M 636,502 L 682,518 C 708,527 698,556 678,557
+        C 666,557 653,542 630,514 C 624,507 627,499 636,502 Z"/>
+    </g>
+    <g id="dog">
+      <g stroke-width="15" class="ps-white-fill ps-green-stroke">
+        <path id="dog-left-ear" d="M 593,226
+          C 589,199 572,180 550,181 C 526,180 514,196 494,211
+          C 478,223 454,233 451,249 C 447,267 460,280 477,279
+          C 500,279 515,252 533,231 C 542,219 549,221 553,234
+          C 555,241 555,244 555,249 Z"/>
+        <path id="dog-head-and-right-ear" d="M 495,318
+          C 500,267 539,226 591,225 C 622,224 648,238 666,257
+          C 683,241 702,246 714,260 C 726,273 730,290 742,305
+          C 756,321 771,330 769,348 C 767,367 754,383 736,380
+          C 709,376 704,347 699,319 C 697,304 693,289 686,288
+          C 699,332 674,397 609,422 C 566,438 514,414 500,375
+          C 494,357 493,336 495,318 Z"/>
+      </g>
+      <g id="dog-face" class="ps-green-fill">
+        <ellipse cx="564" cy="283" rx="11.5" ry="13.5" transform="rotate(12 564 283)"/>
+        <ellipse cx="644" cy="312" rx="11.5" ry="13.5" transform="rotate(12 644 312)"/>
+        <path d="M 586,307 C 591,300 608,303 613,309 C 617,316 607,325 599,326
+          C 591,325 581,315 586,307 Z"/>
+      </g>
+      <path id="dog-smile" d="M 599,322 L 595,332
+        M 595,332 C 581,341 564,334 564,321
+        M 595,332 C 593,347 607,354 620,343"
+        fill="none" stroke-width="8" class="ps-green-stroke"/>
+    </g>
+    <g id="cat">
+      <path id="cat-head" d="M 230,390
+        C 229,381 232,374 235,368 C 222,351 215,332 219,322
+        C 225,312 250,317 274,326 C 289,318 306,313 325,313
+        C 336,289 349,268 359,269 C 373,269 389,301 395,324
+        C 414,343 422,367 416,394 C 409,432 374,455 335,459
+        C 298,464 269,456 251,442"
+        stroke-width="15" class="ps-white-fill ps-green-stroke"/>
+      <g id="ear-details" class="ps-ear-fill">
+        <path d="M 237,335 Q 247,333 261,342 Q 257,352 248,359 Q 240,350 237,335 Z"/>
+        <path d="M 345,315 Q 349,299 358,291 Q 367,300 371,319 Z"/>
+      </g>
+      <g id="cat-face" class="ps-green-fill">
+        <circle cx="279" cy="383" r="11.5"/>
+        <circle cx="343" cy="361" r="11.5"/>
+        <path d="M 304,384 C 309,378 323,378 328,384
+          C 332,391 322,398 316,398 C 309,398 300,391 304,384 Z"/>
+      </g>
+      <path id="cat-smile" d="M 316,396 L 316,402
+        M 316,402 C 314,413 304,415 298,409
+        M 316,402 C 321,410 330,408 333,400"
+        fill="none" stroke-width="8" class="ps-green-stroke"/>
+      <path id="cat-whiskers" d="M 244,405 Q 213,403 187,419
+        M 249,423 Q 220,429 198,446
+        M 259,439 Q 237,451 222,469"
+        fill="none" stroke-width="10" class="ps-green-stroke"/>
+    </g>
+    <g id="pin">
+      <path d="M 471,307
+    C 398,307 336,372 336,449
+    C 336,514 390,573 456,631
+    Q 471,646 486,631
+    C 552,573 609,514 609,449
+    C 609,372 545,307 471,307 Z" stroke-width="14" class="ps-green-fill ps-white-stroke"/>
+      <g id="paws" class="ps-orange-fill">
+      <g id="paw-large" transform="translate(434 449)"><ellipse cx="-40" cy="-14" rx="12" ry="16" transform="rotate(-24 -40 -14)"/>
+        <ellipse cx="-21" cy="-42" rx="12" ry="18" transform="rotate(-12 -21 -42)"/>
+        <ellipse cx="9" cy="-49" rx="13" ry="20" transform="rotate(8 9 -49)"/>
+        <ellipse cx="38" cy="-30" rx="12" ry="18" transform="rotate(24 38 -30)"/>
+        <path d="M -36,32 C -34,13 -16,-8 0,-8
+          C 16,-8 35,8 38,25 C 42,42 32,48 18,46
+          C 5,43 -1,46 -12,52 C -27,60 -42,52 -36,32 Z"/></g>
+      <g id="paw-small" transform="translate(509 499) rotate(28) scale(.85)"><ellipse cx="-25" cy="-34" rx="12" ry="18" transform="rotate(-12 -25 -34)"/>
+        <ellipse cx="8" cy="-47" rx="13" ry="20" transform="rotate(8 8 -47)"/>
+        <ellipse cx="39" cy="-29" rx="12" ry="18" transform="rotate(24 39 -29)"/><path d="M -36,32 C -34,13 -16,-8 0,-8
+          C 16,-8 35,8 38,25 C 42,42 32,48 18,46
+          C 5,43 -1,46 -12,52 C -27,60 -42,52 -36,32 Z"/></g>
+    </g>
+    </g>
+  </g></g>
+</svg>
