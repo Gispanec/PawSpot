@@ -12,6 +12,11 @@ function Assert-True([bool]$Condition, [string]$Message) {
 }
 $fixtureDir = Join-Path $Root ('.local\launcher-test-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $fixtureDir -Force
+$LocalDir = $fixtureDir
+$fixture = Join-Path $fixtureDir '.env'
+$heldLog = Join-Path $fixtureDir 'held.log'
+$readyFixture = Join-Path $fixtureDir 'ready.json'
+$diagnosticsPath = Join-Path $fixtureDir 'readiness.jsonl'
 try {
     # Проверяем реальные функции probe/wait до подмены сервисов ниже.
     function Invoke-WebRequest { return [pscustomobject]@{ StatusCode = 200; Content = '{"status":"ready"}' } }
@@ -27,20 +32,68 @@ try {
     Assert-True (!(Test-PawSpotUrl 'https://fresh.trycloudflare.com')) 'DNS failure was accepted.'
     Assert-True ($script:ProbeDetail -match 'NameResolutionFailure.*DNS not ready') 'DNS diagnostic is missing.'
     $rejected = $false
-    try { Wait-PawSpotUrl 'https://fresh.trycloudflare.com' -Component Tunnel -TimeoutSeconds 0 }
+    try { Wait-PawSpotUrl 'https://fresh.trycloudflare.com' -Component Tunnel -TimeoutSeconds 0 6>$null }
     catch { $rejected = $_.Exception.Message -match 'Tunnel.*fresh.trycloudflare.com.*NameResolutionFailure' }
     Assert-True $rejected 'Bounded readiness failure lost component, URL or reason.'
     $script:probeCalls = 0
     function Invoke-WebRequest {
         $script:probeCalls++
-        if ($script:probeCalls -eq 1) { throw [Net.WebException]::new('DNS not ready', [Net.WebExceptionStatus]::NameResolutionFailure) }
+        if ($script:probeCalls -le 5) { throw [Net.WebException]::new('DNS not ready', [Net.WebExceptionStatus]::NameResolutionFailure) }
         return [pscustomobject]@{ StatusCode = 200; Content = '<title>PawSpot</title>' }
     }
-    Wait-PawSpotUrl 'https://fresh.trycloudflare.com' -Component Tunnel -TimeoutSeconds 10
-    Assert-True ($script:probeCalls -eq 2) 'Fresh DNS failure did not recover on retry.'
+    $output = @(Wait-PawSpotUrl 'https://fresh.trycloudflare.com' -Component Tunnel -TimeoutSeconds 20 6>&1)
+    Assert-True ($script:probeCalls -eq 6) 'Fresh DNS failure did not recover on retry.'
+    Assert-True (($output -join "`n") -match '\[OK\] Mini App \(HTTPS\) ready') 'Recovered Mini App success is missing.'
+    Assert-True (($output -join "`n") -notmatch 'NameResolutionFailure|WebException|DNS not ready') 'Transient errors leaked into progress output.'
+    $progress = @($output | Where-Object { "$_" -match 'waiting for Cloudflare DNS' })
+    Assert-True ($progress.Count -eq 2) 'DNS progress must appear immediately and again after 8 seconds, not on every attempt.'
+    $entries = @(Get-Content -LiteralPath $diagnosticsPath | ForEach-Object { $_ | ConvertFrom-Json })
+    Assert-True ($entries.Count -eq 8) 'Not every failed/successful probe or final timeout was logged.'
+    Assert-True ($entries[0].result -eq 'waiting' -and $entries[1].result -eq 'timeout') 'Final timeout result was not logged.'
+    Assert-True ($entries[-1].result -eq 'ready' -and $entries[-1].attempt -eq 6) 'Successful probe result was not logged.'
+    Assert-True ($entries[2].detail -match 'NameResolutionFailure.*DNS not ready') 'Detailed DNS cause is missing from log.'
+    Assert-True ($entries[2].component -eq 'Tunnel' -and $entries[2].url -eq 'https://fresh.trycloudflare.com') 'Diagnostic component/URL is missing.'
+    Assert-True ([DateTimeOffset]::Parse($entries[2].timestamp).Offset -eq [TimeSpan]::Zero) 'Diagnostic timestamp must be UTC.'
+    # Быстрый запуск не должен показывать DNS-ожидание.
+    $output = @(Wait-PawSpotUrl 'https://fresh.trycloudflare.com' -Component Tunnel 6>&1) -join "`n"
+    Assert-True ($output -match '\[OK\]' -and $output -notmatch 'waiting for Cloudflare DNS') 'Fast success output is incorrect.'
+    # Проверяем предел попыток без реальных задержек и изменений сети.
+    $script:sleepCalls = 0
+    function Start-Sleep {
+        param([int]$Seconds)
+        Assert-True ($Seconds -eq 2) 'Readiness retry interval changed.'
+        $script:sleepCalls++
+    }
+    function Invoke-WebRequest { throw [Net.WebException]::new('DNS not ready', [Net.WebExceptionStatus]::NameResolutionFailure) }
+    $output = @(& {
+        try { Wait-PawSpotUrl 'https://fresh.trycloudflare.com' -Component Tunnel -TimeoutSeconds 180 }
+        catch { $script:timeoutMessage = $_.Exception.Message }
+    } 6>&1) -join "`n"
+    Assert-True ($script:timeoutMessage -match '90 attempts.*NameResolutionFailure.*readiness.jsonl') 'Attempt limit lost final error or diagnostics path.'
+    Assert-True ($script:sleepCalls -eq 90) 'Readiness retry count changed.'
+    Assert-True ($output -notmatch '\[OK\]|NameResolutionFailure|WebException') 'Timeout appeared successful or flooded the console.'
+    Remove-Item Function:Start-Sleep
+    foreach ($failure in @('http', 'html')) {
+        function Invoke-WebRequest {
+            if ($failure -eq 'http') { return [pscustomobject]@{ StatusCode = 503; Content = 'Unavailable' } }
+            return [pscustomobject]@{ StatusCode = 200; Content = '<title>Other app</title>' }
+        }
+        $rejected = $false
+        try { Wait-PawSpotUrl 'https://fresh.trycloudflare.com' -Component Tunnel -TimeoutSeconds 0 6>$null }
+        catch { $rejected = $_.Exception.Message -match 'HTTP 503|not PawSpot HTML' }
+        Assert-True $rejected 'A real HTTP/content failure was hidden or accepted.'
+    }
+    # Недоступный лог не превращает успешную проверку в ошибку запуска.
+    function Add-Content { throw 'Simulated disk failure' }
+    function Invoke-WebRequest { return [pscustomobject]@{ StatusCode = 200; Content = '<title>PawSpot</title>' } }
+    $output = @(& {
+        Wait-PawSpotUrl 'https://fresh.trycloudflare.com' -Component Tunnel
+        Wait-PawSpotUrl 'https://fresh.trycloudflare.com' -Component Tunnel
+    } 6>&1)
+    Assert-True (@($output | Where-Object { "$_" -match '\[WARN\]' }).Count -eq 1) 'Log failure should warn only once.'
+    Assert-True (@($output | Where-Object { "$_" -match '\[OK\]' }).Count -eq 2) 'Log failure changed readiness results.'
+    Remove-Item Function:Add-Content
     Remove-Item Function:Invoke-WebRequest
-    $fixture = Join-Path $fixtureDir '.env'
-    $heldLog = Join-Path $fixtureDir 'held.log'
     $heldStream = [IO.FileStream]::new($heldLog, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
     $heldWriter = [IO.StreamWriter]::new($heldStream)
     try {
@@ -55,7 +108,6 @@ try {
     try { Assert-True ((Read-SharedLog $heldLog) -eq '') 'Exclusive lock was not retried safely.' }
     finally { $exclusive.Dispose() }
     Assert-True ((Wait-TunnelUrl $heldLog) -eq 'https://held.trycloudflare.com') 'Read did not recover after lock release.'
-    $readyFixture = Join-Path $fixtureDir 'ready.json'
     @{ pid = $PID; status = 'ready'; updated_at = [DateTimeOffset]::UtcNow.ToString('o') } | ConvertTo-Json | Set-Content $readyFixture
     Wait-BotReady $readyFixture
     @{ status = 'failed'; error = 'TelegramConflictError' } | ConvertTo-Json | Set-Content $readyFixture
@@ -81,7 +133,6 @@ try {
     $output = @(Start-PawSpot 6>&1) -join "`n"
     Assert-True ($output -notmatch 'fixture-token|fixture-service') 'Launcher printed secrets.'
     # Проверяем повторный запуск без изменений настоящих Docker/Git/процессов.
-    $LocalDir = $fixtureDir
     $hashPath = Join-Path $fixtureDir 'frontend-lock.sha256'
     Set-Content $hashPath (Get-LockHash (Join-Path $Root 'frontend\package-lock.json'))
     $botStatePath = Join-Path $fixtureDir 'bot.json'
@@ -127,8 +178,10 @@ try {
     }
     Assert-True (Test-Path (Join-Path $Root 'frontend\node_modules')) 'Simulated dependencies not recognized.'
     Assert-True (((Get-Content $hashPath -Raw).Trim()) -eq (Get-LockHash (Join-Path $Root 'frontend\package-lock.json'))) 'Fixture lock hash mismatch.'
-    Start-PawSpot
-    Start-PawSpot
+    $output = @(& { Start-PawSpot; Start-PawSpot } 6>&1) -join "`n"
+    Assert-True ($output -match '\[OK\] Frontend ready; existing process reused' -and $output -match 'existing Cloudflare Tunnel reused') 'Reused components lack clear status.'
+    Assert-True ($output -match '\[OK\] Telegram Bot polling ready' -and $output -match '\[OK\] PawSpot ready') 'Successful launch lacks final ready status.'
+    Assert-True ($output -notmatch 'fixture-token|fixture-service') 'Repeated launch printed secrets.'
     Assert-True ($script:commands.Count -eq 8) 'Repeated launch did not reuse all processes.'
     Assert-True ($script:readyChecks -eq 2) 'Reused bot readiness was not checked.'
     Assert-True (!(($script:commands -join "`n") -match 'merge|npm')) 'Dirty Git or installed dependencies were changed.'
@@ -213,7 +266,36 @@ try {
     }
     Start-PawSpot
     Assert-True (($script:started -join ',') -eq 'Backend,Frontend,Tunnel,Bot') 'Cold startup order is incorrect.'
-    Write-Host 'Launcher validation passed: syntax, env privacy, missing env, dirty Git, repeated launch, simulated healthy services and safe Tunnel URL/Bot order.'
+    # Даже после открытия Tunnel неуспешная HTTPS-проверка блокирует Bot и запись URL.
+    $realWait = (Get-Item Function:Wait-PawSpotUrl).ScriptBlock
+    function Wait-PawSpotUrl {
+        param($Url, [switch]$Backend, [switch]$Ready, $Component = 'Frontend', $TimeoutSeconds = 60)
+        & $realWait $Url -Backend:$Backend -Ready:$Ready -Component $Component -TimeoutSeconds 0
+    }
+    function Test-PawSpotUrl {
+        param($Url)
+        if ($Url -match '^https://') { $script:ProbeDetail = 'NameResolutionFailure: WebException: DNS not ready'; return $false }
+        return $true
+    }
+    function Start-Component {
+        param($Component, $Log, $Cloudflared)
+        $script:started.Add($Component)
+        Assert-True ($Component -eq 'Tunnel') 'Bot started before mandatory HTTPS readiness.'
+        Set-Content -LiteralPath $Log 'https://unavailable.trycloudflare.com'
+        return [pscustomobject]@{ HasExited = $false }
+    }
+    [IO.File]::WriteAllText($fixture, $original)
+    $script:started.Clear()
+    $output = @(& {
+        try { Start-PawSpot }
+        catch { $script:launchError = $_.Exception.Message }
+    } 6>&1) -join "`n"
+    Assert-True ($script:launchError -match 'Tunnel.*NameResolutionFailure.*Bot was not started') 'Full launch lost final readiness failure.'
+    Assert-True (($script:started -join ',') -eq 'Tunnel') 'Failed HTTPS readiness started Bot.'
+    Assert-True ($output -notmatch '\[OK\] PawSpot ready|Telegram Bot polling ready') 'Failed launch reported final success.'
+    Assert-True ([IO.File]::ReadAllText($fixture) -ceq $original) 'Failed HTTPS readiness changed .env.'
+    Assert-True ((Get-Content -LiteralPath $diagnosticsPath -Raw) -notmatch 'fixture-token|fixture-service') 'Readiness log contains secrets.'
+    Write-Host 'Launcher validation passed: progress, DNS recovery, timeout, diagnostics, real failures, syntax, env privacy, repeated launch and safe Tunnel URL/Bot order.'
 } finally {
     # Удаляем только файлы этого теста, без рекурсивного удаления.
     if (Test-Path -LiteralPath $fixture) { Remove-Item -LiteralPath $fixture }
@@ -223,5 +305,6 @@ try {
     if (Test-Path -LiteralPath $tunnelLog) { Remove-Item -LiteralPath $tunnelLog }
     if (Test-Path -LiteralPath $heldLog) { Remove-Item -LiteralPath $heldLog }
     if (Test-Path -LiteralPath $readyFixture) { Remove-Item -LiteralPath $readyFixture }
+    if (Test-Path -LiteralPath $diagnosticsPath) { Remove-Item -LiteralPath $diagnosticsPath }
     Remove-Item -LiteralPath $fixtureDir
 }
